@@ -3,4 +3,4 @@
 # Please make sure Java Development Kit is installed
 
 javac *.java
-java 
+java OS2Clone
