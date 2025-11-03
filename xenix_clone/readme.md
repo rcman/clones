@@ -1,7 +1,7 @@
 # Xenix for PICO
 
 <BR>
-You'll only need the pico4.py for your Pico. Rename it to main.py and upload it to your Pico.
+You'll only need the pico4.py for your Pico. Rename it to main.py and upload it to your Pico.  There is a Java version which should be up to date but the python one will be newer. 
 <BR>
 <BR>
 
