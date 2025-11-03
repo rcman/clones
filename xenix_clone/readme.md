@@ -1,3 +1,9 @@
+# Xenix for PICO
+
+<BR>
+You'll only need the 
+
+
 
 I've created a Xenix OS simulator in Java that includes the core commands that were present in the original Xenix operating system. Here's what's included:
 File System Commands:
