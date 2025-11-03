@@ -1,0 +1,50 @@
+Perfect! I've added full serial port support to your Xenix clone with VT100 terminal compatibility. Here's what's new:
+Serial Terminal Features:
+Command Line Options:
+bash# List available serial ports
+java XenixOS -list-ports
+
+# Connect to a serial port (Windows)
+java XenixOS -serial COM3 -baud 115200
+
+# Connect to a serial port (Linux/Mac)
+java XenixOS -serial /dev/ttyUSB0 -baud 9600
+
+# Show help
+java XenixOS -help
+New Commands:
+
+serial - List available serial ports and show connection status
+serial disconnect - Disconnect from serial terminal and return to console
+stty - Display terminal settings (baud rate, line settings)
+
+VT100 Terminal Support:
+
+Full VT100 escape sequence support for clear screen, cursor positioning
+Proper CRLF handling (converts LF to CRLF for terminals)
+Character echo for interactive typing
+Backspace/DEL key handling
+Ctrl+C support
+Line buffering with proper line ending detection
+
+Features:
+
+Automatic detection and initialization of serial ports
+Configurable baud rates (9600, 115200, etc.)
+Works with hardware VT100 terminals or terminal emulators
+All output properly formatted for serial terminals
+Fallback to console mode if serial connection fails
+
+Required Library:
+You'll need to add jSerialComm to your classpath:
+bash# Download from: https://github.com/Fazecast/jSerialComm
+# Or use Maven:
+<dependency>
+    <groupId>com.fazecast</groupId>
+    <artifactId>jSerialComm</artifactId>
+    <version>2.10.4</version>
+</dependency>
+Compilation:
+bashjavac -cp ".:jSerialComm-2.10.4.jar" XenixOS.java
+java -cp ".:jSerialComm-2.10.4.jar" XenixOS -serial /dev/ttyUSB0 -baud 9600
+The system now supports real VT100 terminals or emulators like PuTTY, minicom, or screen!
