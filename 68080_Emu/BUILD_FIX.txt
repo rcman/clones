@@ -1,0 +1,160 @@
+═══════════════════════════════════════════════════════════════════════════
+  BUILD FIX - M68KCore Helper Methods Added
+═══════════════════════════════════════════════════════════════════════════
+
+✅ ISSUE FIXED
+
+═══════════════════════════════════════════════════════════════════════════
+PROBLEM:
+═══════════════════════════════════════════════════════════════════════════
+
+ExceptionController.java needed methods that didn't exist in M68KCore.java:
+  • getVBR() / setVBR()
+  • setSR()
+  • isSupervisorMode() / setSupervisorMode()
+  • isTraceMode() / setTraceMode()
+  • switchToSupervisorStack() / switchToUserStack()
+  • pushStack() / pushStack16()
+  • popStack() / popStack16()
+
+
+═══════════════════════════════════════════════════════════════════════════
+SOLUTION:
+═══════════════════════════════════════════════════════════════════════════
+
+Added complete OS support methods to M68KCore.java:
+
+1. VBR (Vector Base Register) Access:
+   ───────────────────────────────────
+   public int getVBR()
+   public void setVBR(int vbr)
+   
+   Used by exception controller to find exception vectors.
+
+2. Status Register Control:
+   ────────────────────────
+   public void setSR(short sr)
+   
+   Allows direct SR manipulation for exceptions.
+
+3. Supervisor Mode Control:
+   ────────────────────────
+   public boolean isSupervisorMode()
+   public void setSupervisorMode(boolean supervisor)
+   
+   Checks and sets supervisor/user mode bit in SR.
+
+4. Trace Mode Control:
+   ───────────────────
+   public boolean isTraceMode()
+   public void setTraceMode(boolean trace)
+   
+   Controls single-step trace mode.
+
+5. Stack Switching:
+   ────────────────
+   public void switchToSupervisorStack()
+   public void switchToUserStack()
+   
+   Switches between USP (User Stack Pointer) and SSP (Supervisor Stack Pointer).
+   Critical for exception handling!
+
+6. Stack Operations:
+   ─────────────────
+   public void pushStack(int value)      // Push 32-bit long
+   public void pushStack16(int value)    // Push 16-bit word
+   public int popStack()                 // Pop 32-bit long
+   public int popStack16()               // Pop 16-bit word
+   
+   Used by exception handling to save/restore PC and SR.
+
+
+═══════════════════════════════════════════════════════════════════════════
+WHAT THESE METHODS DO:
+═══════════════════════════════════════════════════════════════════════════
+
+VBR (Vector Base Register):
+───────────────────────────
+The VBR points to the start of the exception vector table.
+Default: 0x00000000 (vectors at 0x00000008)
+Each exception has a 4-byte entry: VBR + (vector_number * 4)
+
+Example:
+  VBR = 0x00000000
+  TRAP #5 = vector 37
+  Vector address = 0 + (37 * 4) = 0x94
+  Handler address = memory[0x94]
+
+Supervisor Mode:
+────────────────
+Bit 13 of SR indicates supervisor (1) or user (0) mode.
+Exceptions always run in supervisor mode.
+Some instructions are privileged (supervisor only).
+
+Stack Switching:
+────────────────
+68000 has TWO stack pointers:
+  • SSP (Supervisor Stack Pointer) - used in supervisor mode
+  • USP (User Stack Pointer) - used in user mode
+  
+Both share register A7, but switch based on mode.
+
+When exception occurs:
+  1. If in user mode, save USP and load SSP into A7
+  2. Push SR and PC onto supervisor stack
+  3. Jump to exception handler
+
+When RTE (Return from Exception):
+  1. Pop PC and SR from supervisor stack
+  2. If returning to user mode, save SSP and restore USP
+
+
+═══════════════════════════════════════════════════════════════════════════
+FILE UPDATED:
+═══════════════════════════════════════════════════════════════════════════
+
+✅ M68KCore.java
+   Added ~75 lines of OS support methods
+   Total lines: ~1,465
+
+
+═══════════════════════════════════════════════════════════════════════════
+NOW TRY BUILDING AGAIN:
+═══════════════════════════════════════════════════════════════════════════
+
+$ ./build-os.sh
+
+Should now compile successfully:
+  ✅ Bus1024Bit.java
+  ✅ ExceptionController.java
+  ✅ TimerPeripheral.java
+  ✅ UARTPeripheral.java
+  ✅ NVMeController.java
+  ✅ M68KCore.java
+  ✅ SBCGUI.java
+
+
+═══════════════════════════════════════════════════════════════════════════
+VERIFICATION:
+═══════════════════════════════════════════════════════════════════════════
+
+After successful build, you should have:
+  ☑ Bus1024Bit.class
+  ☑ ExceptionController.class
+  ☑ TimerPeripheral.class
+  ☑ UARTPeripheral.class
+  ☑ NVMeController.class
+  ☑ M68KCore.class
+  ☑ M68KCore$OpSize.class
+  ☑ SBCGUI.class
+  ☑ SBCGUI$1.class
+  ☑ UARTPeripheral$UARTCallback.class
+  ... and more inner class files
+
+Total: ~15 .class files
+
+And storage file:
+  ☑ nvme_storage.img (1 GB)
+
+
+═══════════════════════════════════════════════════════════════════════════

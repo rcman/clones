@@ -1,0 +1,14 @@
+# create_binary.py
+data = [
+    0x20, 0x3C, 0x12, 0x34, 0x56, 0x78,  # MOVE.L #0x12345678, D0
+    0x22, 0x3C, 0x87, 0x65, 0x43, 0x21,  # MOVE.L #0x87654321, D1
+    0xD0, 0x81,                          # ADD.L D1, D0
+    0x24, 0x00,                          # MOVE.L D0, D2
+    0x4E, 0x71,                          # NOP
+    0x4E, 0x72, 0x27, 0x00               # STOP #0x2700
+]
+
+with open('test.bin', 'wb') as f:
+    f.write(bytes(data))
+
+print(f"Created test.bin ({len(data)} bytes)")
