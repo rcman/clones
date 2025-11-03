@@ -1,7 +1,9 @@
 # Xenix for PICO
 
 <BR>
-You'll only need the 
+You'll only need the pico4.py for your Pico. Rename it to main.py and upload it to your Pico.
+<BR>
+<BR>
 
 
 
