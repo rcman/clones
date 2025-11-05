@@ -252,7 +252,7 @@ class SerialTerminal:
     def read_line(self):
         line = ""
         while True:
-            if sys.stdin in sys.stdin.buffer.raw.ioctl(3, 0):  # Check for input
+           # if sys.stdin in sys.stdin.buffer.raw.ioctl(3, 0):  # Check for input
                 char = sys.stdin.read(1)
                 
                 if char in ('\r', '\n'):
