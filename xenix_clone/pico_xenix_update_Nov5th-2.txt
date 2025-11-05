@@ -1,0 +1,22 @@
+I've modified the code to support simultaneous multi-user sessions. Here are the key changes:
+Main Features:
+
+Thread-Safe Filesystem: Added _thread.allocate_lock() to protect concurrent file access
+Separate Sessions: Each terminal (USB and UART) gets its own XenixSession instance with independent:
+
+Current directory
+Path stack
+User login
+Terminal state
+
+
+Shared Resources: All users share the same filesystem, so changes made by one user are visible to others
+
+How It Works:
+
+USB Console: Runs in the main thread on sys.stdin/stdout (labeled ttyUSB0)
+UART Terminal: Runs in a separate thread on GPIO pins (labeled ttyS0)
+Both can login independently and work simultaneously
+
+Configuration:
+Set ENABLE_UART = True/False in main() to enable/disable the UART terminal. Configure UART pins by modifying the _thread.start_new_thread() call:
