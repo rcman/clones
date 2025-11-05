@@ -2,7 +2,12 @@
 
 <BR>
 
-So sorry for not fixing this, it's fixed now and will be updated again soon. The File to use for Xenix is PICO_WORKING.py and that's the one you copy to your Pico. <BR>
+# Updated November 5th
+
+<BR>
+<BR>
+
+So sorry for not fixing this, it's fixed now and will be updated again soon. The File to use for Xenix is PICO_WORKING.py and that's the one you copy to your Pico. The Java version works just fine if you want to use that.<BR>
 
 
 
