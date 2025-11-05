@@ -5,7 +5,10 @@ You'll only need the pico4.py for your Pico. Rename it to main.py and upload it 
 <BR>
 <BR>
 
+pico_update_Nov5th.py is test code I am working on, you can try it but not sure if there are issues.
 
+<BR>
+<BR>
 
 I've created a Xenix OS simulator in Java that includes the core commands that were present in the original Xenix operating system. Here's what's included:
 File System Commands:
