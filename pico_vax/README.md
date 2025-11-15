@@ -202,8 +202,8 @@ python vax_test.py
 
 ### Running on Raspberry Pi Pico
 1. Install MicroPython on your Raspberry Pi Pico
-2. Copy `vax_test.py` to the Pico
-3. Connect via serial terminal (115200 baud)
+2. Copy `vax_vax.py` to the Pico
+3. Connect via serial terminal (115200 baud) this can be changed in the code
 4. Reset the Pico to boot into VMS
 
 ### First Time Boot
