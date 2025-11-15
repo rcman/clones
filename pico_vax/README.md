@@ -1,4 +1,4 @@
-# VAX/VMS Emulator for Raspberry Pi Pico
+# VAX/VMS Emulator for Raspberry Pi Pico Updated November 15th 2025
 
 A complete, authentic VAX/VMS operating system emulator written in Python, designed to run on Raspberry Pi Pico or any Python environment. Experience the classic Digital Equipment Corporation (DEC) operating system with full DCL (Digital Command Language) command-line interface.
 
