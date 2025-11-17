@@ -7,8 +7,8 @@
 <BR>
 <BR>
 
-  - Pico Xenix Updated <BR>
-  - Pico Vax Updated <BR>
+  - Pico Xenix Updated on the November 15th, 2025 <BR>
+  - Pico Vax Updated on the November 15th, 2025 <BR>
   - SGI  IRIX - No change <BR>
   - OS/2 Clone - No Change <BR>
   - 68000_Emu - Work in progress. More issues with OpCode.<BR>
