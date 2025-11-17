@@ -53,4 +53,4 @@ See `INSTRUCTION_LIST.txt` for the complete list.
 
 ---
 
-**Status: COMPLETE** - No missing instructions. Ready to use.
+**Status: COMPLETE** - Work in Progress. Functional but not all OpCodes are there.
