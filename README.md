@@ -2,6 +2,11 @@
 
 <BR>
 
+# Versions for PICO 2 W are coming.
+
+<BR>
+
+
 # Updated November 16th
 
 <BR>
