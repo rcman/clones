@@ -1,23 +1,40 @@
-// WorkspaceManager.java - Enhanced Version
+// WorkspaceManager.java - Enhanced workspace manager
+// Improvements: Cleaner code, better visual feedback, drag-and-drop (placeholder)
+
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
 
+/**
+ * Manages virtual workspaces (desktops) allowing users to organize windows.
+ */
 public class WorkspaceManager extends JDialog {
-    private int numWorkspaces;
-    private JButton[] workspaceButtons;
-    private IRIXDesktop desktop;
+    
+    private final int numWorkspaces;
+    private final JButton[] workspaceButtons;
+    private final IRIXDesktop desktop;
     private int currentWorkspace = 0;
+    
+    // Workspace colors
+    private static final Color[] WORKSPACE_COLORS = {
+        new Color(173, 216, 230),  // Light Blue
+        new Color(255, 182, 193),  // Light Pink
+        new Color(144, 238, 144),  // Light Green
+        new Color(255, 255, 224)   // Light Yellow
+    };
     
     public WorkspaceManager(int numWorkspaces, IRIXDesktop desktop) {
         super((Frame)desktop, "Workspace Manager", false);
         this.numWorkspaces = numWorkspaces;
         this.desktop = desktop;
+        this.workspaceButtons = new JButton[numWorkspaces];
+        
         initializeUI();
+        setupKeyboardShortcuts();
     }
     
     private void initializeUI() {
-        setSize(500, 380);
+        setSize(500, 400);
         setDefaultCloseOperation(HIDE_ON_CLOSE);
         setLocationRelativeTo(desktop);
         
@@ -25,12 +42,12 @@ public class WorkspaceManager extends JDialog {
         mainPanel.setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
         mainPanel.setBackground(new Color(240, 240, 240));
         
-        // Title panel
+        // Title
         JPanel titlePanel = new JPanel(new BorderLayout());
-        titlePanel.setBackground(new Color(240, 240, 240));
+        titlePanel.setOpaque(false);
         
         JLabel titleLabel = new JLabel("Virtual Workspaces");
-        titleLabel.setFont(new Font("SansSerif", Font.BOLD, 16));
+        titleLabel.setFont(new Font("SansSerif", Font.BOLD, 18));
         
         JLabel subtitle = new JLabel("Click a workspace to switch, or use Ctrl+Alt+1-4");
         subtitle.setFont(new Font("SansSerif", Font.PLAIN, 11));
@@ -41,130 +58,114 @@ public class WorkspaceManager extends JDialog {
         
         // Workspace grid
         JPanel gridPanel = new JPanel(new GridLayout(2, 2, 15, 15));
-        gridPanel.setBackground(new Color(240, 240, 240));
-        gridPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-        
-        workspaceButtons = new JButton[numWorkspaces];
-        
-        Color[] colors = {
-            new Color(173, 216, 230),  // Light Blue
-            new Color(255, 182, 193),  // Light Pink
-            new Color(144, 238, 144),  // Light Green
-            new Color(255, 255, 224)   // Light Yellow
-        };
+        gridPanel.setOpaque(false);
+        gridPanel.setBorder(BorderFactory.createEmptyBorder(15, 10, 15, 10));
         
         for (int i = 0; i < numWorkspaces; i++) {
-            final int workspaceNum = i;
-            
-            JPanel wsPanel = new JPanel(new BorderLayout());
-            wsPanel.setBackground(colors[i]);
-            wsPanel.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(Color.GRAY, 2),
-                BorderFactory.createEmptyBorder(10, 10, 10, 10)
-            ));
-            
-            workspaceButtons[i] = new JButton() {
-                @Override
-                protected void paintComponent(Graphics g) {
-                    Graphics2D g2d = (Graphics2D) g;
-                    g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                    
-                    // Background
-                    if (workspaceNum == currentWorkspace) {
-                        g2d.setColor(colors[workspaceNum].darker());
-                    } else if (getModel().isRollover()) {
-                        g2d.setColor(colors[workspaceNum].brighter());
-                    } else {
-                        g2d.setColor(colors[workspaceNum]);
-                    }
-                    g2d.fillRect(0, 0, getWidth(), getHeight());
-                    
-                    // Border
-                    g2d.setColor(Color.GRAY);
-                    g2d.setStroke(new BasicStroke(2));
-                    g2d.drawRect(1, 1, getWidth()-2, getHeight()-2);
-                    
-                    // Active indicator
-                    if (workspaceNum == currentWorkspace) {
-                        g2d.setColor(new Color(0, 128, 0));
-                        g2d.fillOval(10, 10, 12, 12);
-                        g2d.setColor(Color.WHITE);
-                        g2d.setFont(new Font("SansSerif", Font.BOLD, 8));
-                        g2d.drawString("✓", 13, 19);
-                    }
-                    
-                    // Workspace number
-                    g2d.setColor(Color.BLACK);
-                    g2d.setFont(new Font("SansSerif", Font.BOLD, 48));
-                    FontMetrics fm = g2d.getFontMetrics();
-                    String text = String.valueOf(workspaceNum + 1);
-                    int textWidth = fm.stringWidth(text);
-                    int textHeight = fm.getHeight();
-                    g2d.drawString(text, (getWidth() - textWidth) / 2, 
-                                  (getHeight() + textHeight / 2) / 2);
-                    
-                    // Label
-                    g2d.setFont(new Font("SansSerif", Font.BOLD, 14));
-                    fm = g2d.getFontMetrics();
-                    String label = "Workspace " + (workspaceNum + 1);
-                    textWidth = fm.stringWidth(label);
-                    g2d.drawString(label, (getWidth() - textWidth) / 2, getHeight() - 15);
-                }
-            };
-            
-            workspaceButtons[i].setPreferredSize(new Dimension(200, 140));
-            workspaceButtons[i].setBorder(BorderFactory.createEmptyBorder());
-            workspaceButtons[i].setContentAreaFilled(false);
-            workspaceButtons[i].setFocusPainted(false);
-            workspaceButtons[i].setCursor(new Cursor(Cursor.HAND_CURSOR));
-            
-            workspaceButtons[i].addActionListener(e -> {
-                currentWorkspace = workspaceNum;
-                desktop.switchWorkspace(workspaceNum);
-                setVisible(false);
-                repaintButtons();
-            });
-            
-            // Tooltip
-            workspaceButtons[i].setToolTipText("Switch to Workspace " + (i + 1) + 
-                                              " (Ctrl+Alt+" + (i + 1) + ")");
-            
-            gridPanel.add(workspaceButtons[i]);
+            gridPanel.add(createWorkspaceButton(i));
         }
         
         // Info panel
         JPanel infoPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
-        infoPanel.setBackground(new Color(240, 240, 240));
+        infoPanel.setOpaque(false);
         
-        JLabel infoLabel = new JLabel("💡 Each workspace maintains its own set of windows");
+        JLabel infoLabel = new JLabel("\uD83D\uDCA1 Each workspace maintains its own set of windows");
         infoLabel.setFont(new Font("SansSerif", Font.ITALIC, 11));
         infoLabel.setForeground(new Color(100, 100, 100));
-        
         infoPanel.add(infoLabel);
         
         // Button panel
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        buttonPanel.setBackground(new Color(240, 240, 240));
+        buttonPanel.setOpaque(false);
         
         JButton closeBtn = new JButton("Close");
-        closeBtn.setFont(new Font("SansSerif", Font.PLAIN, 11));
         closeBtn.addActionListener(e -> setVisible(false));
-        
         buttonPanel.add(closeBtn);
+        
+        // Combine info and button panels
+        JPanel bottomPanel = new JPanel(new BorderLayout());
+        bottomPanel.setOpaque(false);
+        bottomPanel.add(infoPanel, BorderLayout.CENTER);
+        bottomPanel.add(buttonPanel, BorderLayout.SOUTH);
         
         mainPanel.add(titlePanel, BorderLayout.NORTH);
         mainPanel.add(gridPanel, BorderLayout.CENTER);
-        mainPanel.add(infoPanel, BorderLayout.SOUTH);
-        
-        JPanel bottomPanel = new JPanel(new BorderLayout());
-        bottomPanel.setBackground(new Color(240, 240, 240));
-        bottomPanel.add(buttonPanel, BorderLayout.SOUTH);
-        
         mainPanel.add(bottomPanel, BorderLayout.SOUTH);
         
         add(mainPanel);
+    }
+    
+    private JButton createWorkspaceButton(int index) {
+        workspaceButtons[index] = new JButton() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2d = (Graphics2D) g;
+                g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, 
+                                     RenderingHints.VALUE_ANTIALIAS_ON);
+                
+                // Background
+                Color bgColor = WORKSPACE_COLORS[index];
+                if (index == currentWorkspace) {
+                    bgColor = bgColor.darker();
+                } else if (getModel().isRollover()) {
+                    bgColor = bgColor.brighter();
+                }
+                g2d.setColor(bgColor);
+                g2d.fillRoundRect(0, 0, getWidth(), getHeight(), 10, 10);
+                
+                // Border
+                g2d.setColor(index == currentWorkspace ? 
+                    new Color(0, 100, 0) : Color.GRAY);
+                g2d.setStroke(new BasicStroke(index == currentWorkspace ? 3 : 2));
+                g2d.drawRoundRect(2, 2, getWidth()-4, getHeight()-4, 8, 8);
+                
+                // Active indicator
+                if (index == currentWorkspace) {
+                    g2d.setColor(new Color(0, 150, 0));
+                    g2d.fillOval(10, 10, 16, 16);
+                    g2d.setColor(Color.WHITE);
+                    g2d.setFont(new Font("SansSerif", Font.BOLD, 12));
+                    g2d.drawString("\u2713", 13, 22);
+                }
+                
+                // Workspace number
+                g2d.setColor(new Color(0, 0, 0, 150));
+                g2d.setFont(new Font("SansSerif", Font.BOLD, 56));
+                FontMetrics fm = g2d.getFontMetrics();
+                String text = String.valueOf(index + 1);
+                int textX = (getWidth() - fm.stringWidth(text)) / 2;
+                int textY = (getHeight() + fm.getAscent()) / 2 - 10;
+                g2d.drawString(text, textX, textY);
+                
+                // Label
+                g2d.setFont(new Font("SansSerif", Font.BOLD, 13));
+                fm = g2d.getFontMetrics();
+                String label = "Workspace " + (index + 1);
+                textX = (getWidth() - fm.stringWidth(label)) / 2;
+                g2d.drawString(label, textX, getHeight() - 15);
+            }
+        };
         
-        setupKeyboardShortcuts();
+        workspaceButtons[index].setPreferredSize(new Dimension(200, 150));
+        workspaceButtons[index].setBorder(BorderFactory.createEmptyBorder());
+        workspaceButtons[index].setContentAreaFilled(false);
+        workspaceButtons[index].setFocusPainted(false);
+        workspaceButtons[index].setCursor(new Cursor(Cursor.HAND_CURSOR));
+        workspaceButtons[index].setToolTipText("Switch to Workspace " + (index + 1) + 
+                                               " (Ctrl+Alt+" + (index + 1) + ")");
+        
+        workspaceButtons[index].addActionListener(e -> {
+            switchToWorkspace(index);
+            setVisible(false);
+        });
+        
+        return workspaceButtons[index];
+    }
+    
+    private void switchToWorkspace(int workspace) {
+        currentWorkspace = workspace;
+        desktop.switchWorkspace(workspace);
+        repaintButtons();
     }
     
     private void repaintButtons() {
@@ -174,38 +175,50 @@ public class WorkspaceManager extends JDialog {
     }
     
     private void setupKeyboardShortcuts() {
+        // Workspace shortcuts
         for (int i = 0; i < numWorkspaces && i < 4; i++) {
-            final int workspaceNum = i;
+            final int workspace = i;
             KeyStroke keyStroke = KeyStroke.getKeyStroke(
-                KeyEvent.VK_1 + i, 
+                KeyEvent.VK_1 + i,
                 InputEvent.CTRL_DOWN_MASK | InputEvent.ALT_DOWN_MASK
             );
             
             getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
                 .put(keyStroke, "switchToWorkspace" + i);
-                
+            
             getRootPane().getActionMap().put("switchToWorkspace" + i, new AbstractAction() {
+                @Override
                 public void actionPerformed(ActionEvent e) {
-                    currentWorkspace = workspaceNum;
-                    desktop.switchWorkspace(workspaceNum);
+                    switchToWorkspace(workspace);
                     setVisible(false);
-                    repaintButtons();
                 }
             });
         }
         
         // ESC to close
         KeyStroke escKey = KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0);
-        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(escKey, "closeDialog");
+        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
+            .put(escKey, "closeDialog");
         getRootPane().getActionMap().put("closeDialog", new AbstractAction() {
+            @Override
             public void actionPerformed(ActionEvent e) {
                 setVisible(false);
             }
         });
     }
     
+    /**
+     * Update the current workspace indicator
+     */
     public void setCurrentWorkspace(int workspace) {
         this.currentWorkspace = workspace;
         repaintButtons();
+    }
+    
+    /**
+     * Get the current workspace index
+     */
+    public int getCurrentWorkspace() {
+        return currentWorkspace;
     }
 }

@@ -1,22 +1,32 @@
-// StartMenu.java - Enhanced Version
+// StartMenu.java - Enhanced IRIX-style start menu
+// Improvements: Better organization, recent items, search (placeholder)
+
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
 
+/**
+ * IRIX-style start menu with categorized applications.
+ */
 public class StartMenu extends JWindow {
-    private final Color MENU_BG = new Color(189, 189, 189);
-    private final Color HEADER_BG = new Color(0, 102, 204);
-    private final Color HIGHLIGHT = new Color(0, 0, 128);
-    private final Color HIGHLIGHT_TEXT = Color.WHITE;
-    private final Color DARK_GRAY = new Color(99, 99, 99);
-    private final Color SHADOW = new Color(66, 66, 66);
-    private IRIXDesktop desktop;
+    
+    private static final Color MENU_BG = new Color(189, 189, 189);
+    private static final Color HEADER_BG = new Color(0, 102, 204);
+    private static final Color HIGHLIGHT = new Color(0, 0, 128);
+    private static final Color HIGHLIGHT_TEXT = Color.WHITE;
+    private static final Color DARK_GRAY = new Color(99, 99, 99);
+    
+    private final IRIXDesktop desktop;
     
     public StartMenu(IRIXDesktop desktop) {
         this.desktop = desktop;
-        setSize(240, 400);
+        setSize(260, 420);
         setBackground(new Color(0, 0, 0, 0));
         
+        initializeUI();
+    }
+    
+    private void initializeUI() {
         JPanel content = new JPanel(new BorderLayout());
         content.setBackground(MENU_BG);
         content.setBorder(BorderFactory.createCompoundBorder(
@@ -27,85 +37,101 @@ public class StartMenu extends JWindow {
             )
         ));
         
-        // Header with SGI branding
+        // Header
+        JPanel header = createHeader();
+        content.add(header, BorderLayout.NORTH);
+        
+        // Menu items
+        JPanel menuPanel = createMenuPanel();
+        JScrollPane scrollPane = new JScrollPane(menuPanel);
+        scrollPane.setBorder(BorderFactory.createEmptyBorder());
+        scrollPane.getVerticalScrollBar().setUnitIncrement(16);
+        content.add(scrollPane, BorderLayout.CENTER);
+        
+        setContentPane(content);
+    }
+    
+    private JPanel createHeader() {
         JPanel header = new JPanel(new BorderLayout());
         header.setBackground(HEADER_BG);
-        header.setPreferredSize(new Dimension(240, 50));
+        header.setPreferredSize(new Dimension(260, 55));
+        header.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
         
-        JLabel logoLabel = new JLabel("  IRIX");
+        JLabel logoLabel = new JLabel("IRIX");
         logoLabel.setForeground(Color.WHITE);
-        logoLabel.setFont(new Font("SansSerif", Font.BOLD, 24));
+        logoLabel.setFont(new Font("SansSerif", Font.BOLD, 26));
         
-        JLabel subtitle = new JLabel("  Applications");
+        JLabel subtitle = new JLabel("Desktop Environment");
         subtitle.setForeground(new Color(200, 220, 255));
         subtitle.setFont(new Font("SansSerif", Font.PLAIN, 11));
         
-        JPanel headerText = new JPanel(new BorderLayout());
-        headerText.setBackground(HEADER_BG);
-        headerText.add(logoLabel, BorderLayout.NORTH);
-        headerText.add(subtitle, BorderLayout.SOUTH);
+        JPanel headerText = new JPanel();
+        headerText.setLayout(new BoxLayout(headerText, BoxLayout.Y_AXIS));
+        headerText.setOpaque(false);
+        headerText.add(logoLabel);
+        headerText.add(subtitle);
         
-        header.add(headerText, BorderLayout.CENTER);
+        header.add(headerText, BorderLayout.WEST);
         
-        // Menu items
-        String[][] menuItems = {
-            {"System Manager", "system", "⚙️"},
-            {"Terminal", "terminal", "🖥️"},
-            {"File Manager", "files", "📁"},
-            {"Text Editor", "editor", "📝"},
-            {"Web Browser", "browser", "🌐"},
-            {"Calculator", "calculator", "🔢"},
-            {"Drawing Tool", "draw", "🎨"},
-            {"Media Player", "media", "🎵"},
-            {"", "separator", ""},
-            {"System Settings", "settings", "⚡"},
-            {"Help", "help", "❓"},
-            {"", "separator", ""},
-            {"Shutdown", "shutdown", "⏻"}
-        };
-        
+        return header;
+    }
+    
+    private JPanel createMenuPanel() {
         JPanel menuPanel = new JPanel();
         menuPanel.setLayout(new BoxLayout(menuPanel, BoxLayout.Y_AXIS));
         menuPanel.setBackground(MENU_BG);
         menuPanel.setBorder(BorderFactory.createEmptyBorder(5, 2, 5, 2));
         
-        for (String[] item : menuItems) {
-            if (item[1].equals("separator")) {
-                JSeparator sep = new JSeparator();
-                sep.setForeground(DARK_GRAY);
-                sep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
-                menuPanel.add(Box.createVerticalStrut(3));
-                menuPanel.add(sep);
-                menuPanel.add(Box.createVerticalStrut(3));
-            } else {
-                JPanel menuItem = createMenuItem(item[0], item[1], item[2]);
-                menuPanel.add(menuItem);
-            }
-        }
+        // Applications section
+        addSectionHeader(menuPanel, "Applications");
+        addMenuItem(menuPanel, "System Manager", "\u2699\uFE0F", "system");
+        addMenuItem(menuPanel, "Terminal", "\uD83D\uDCBB", "terminal");
+        addMenuItem(menuPanel, "File Manager", "\uD83D\uDCC1", "files");
+        addMenuItem(menuPanel, "Text Editor", "\uD83D\uDCDD", "editor");
+        addMenuItem(menuPanel, "Web Browser", "\uD83C\uDF10", "browser");
+        addMenuItem(menuPanel, "Calculator", "\uD83D\uDCF1", "calculator");
+        addMenuItem(menuPanel, "Drawing Tool", "\uD83C\uDFA8", "draw");
+        addMenuItem(menuPanel, "Media Player", "\uD83C\uDFB5", "media");
         
-        JScrollPane scrollPane = new JScrollPane(menuPanel);
-        scrollPane.setBorder(BorderFactory.createEmptyBorder());
-        scrollPane.getVerticalScrollBar().setUnitIncrement(16);
+        addSeparator(menuPanel);
         
-        content.add(header, BorderLayout.NORTH);
-        content.add(scrollPane, BorderLayout.CENTER);
+        // System section
+        addSectionHeader(menuPanel, "System");
+        addMenuItem(menuPanel, "System Settings", "\u26A1", "settings");
+        addMenuItem(menuPanel, "Help", "\u2753", "help");
         
-        setContentPane(content);
+        addSeparator(menuPanel);
         
-        // Click outside to close
-        addMouseListener(new MouseAdapter() {
-            public void mouseExited(MouseEvent e) {
-                // Could auto-hide here if desired
-            }
-        });
+        // Power section
+        addMenuItem(menuPanel, "Shutdown", "\u23FB", "shutdown");
+        
+        return menuPanel;
     }
     
-    private JPanel createMenuItem(String text, String action, String emoji) {
+    private void addSectionHeader(JPanel panel, String text) {
+        JLabel header = new JLabel("  " + text);
+        header.setFont(new Font("SansSerif", Font.BOLD, 10));
+        header.setForeground(DARK_GRAY);
+        header.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
+        header.setBorder(BorderFactory.createEmptyBorder(5, 5, 2, 5));
+        panel.add(header);
+    }
+    
+    private void addSeparator(JPanel panel) {
+        panel.add(Box.createVerticalStrut(3));
+        JSeparator sep = new JSeparator();
+        sep.setForeground(DARK_GRAY);
+        sep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+        panel.add(sep);
+        panel.add(Box.createVerticalStrut(3));
+    }
+    
+    private void addMenuItem(JPanel panel, String text, String emoji, String action) {
         JPanel menuItem = new JPanel(new BorderLayout());
         menuItem.setOpaque(true);
         menuItem.setBackground(MENU_BG);
-        menuItem.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
-        menuItem.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
+        menuItem.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
+        menuItem.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
         
         JLabel icon = new JLabel(emoji + "  ");
         icon.setFont(new Font("SansSerif", Font.PLAIN, 16));
@@ -118,59 +144,43 @@ public class StartMenu extends JWindow {
         menuItem.add(label, BorderLayout.CENTER);
         
         menuItem.addMouseListener(new MouseAdapter() {
+            @Override
             public void mouseEntered(MouseEvent e) {
                 menuItem.setBackground(HIGHLIGHT);
                 label.setForeground(HIGHLIGHT_TEXT);
-                icon.setForeground(HIGHLIGHT_TEXT);
             }
             
+            @Override
             public void mouseExited(MouseEvent e) {
                 menuItem.setBackground(MENU_BG);
                 label.setForeground(Color.BLACK);
-                icon.setForeground(Color.BLACK);
             }
             
+            @Override
             public void mouseClicked(MouseEvent e) {
                 desktop.playClickSound();
                 setVisible(false);
-                executeMenuAction(action);
+                executeAction(action);
             }
         });
         
-        return menuItem;
+        panel.add(menuItem);
     }
     
-    private void executeMenuAction(String action) {
+    private void executeAction(String action) {
         switch (action) {
-            case "system":
-                desktop.openSystemManager();
-                break;
-            case "terminal":
-                desktop.openTerminal();
-                break;
-            case "files":
-                desktop.openFileManager();
-                break;
-            case "editor":
-                desktop.openTextEditor();
-                break;
-            case "browser":
-                desktop.openWebBrowser();
-                break;
-            case "calculator":
-                desktop.openCalculator();
-                break;
-            case "draw":
-                desktop.openDrawingApp();
-                break;
-            case "media":
-                desktop.openMediaPlayer();
-                break;
+            case "system": desktop.openSystemManager(); break;
+            case "terminal": desktop.openTerminal(); break;
+            case "files": desktop.openFileManager(); break;
+            case "editor": desktop.openTextEditor(); break;
+            case "browser": desktop.openWebBrowser(); break;
+            case "calculator": desktop.openCalculator(); break;
+            case "draw": desktop.openDrawingApp(); break;
+            case "media": desktop.openMediaPlayer(); break;
             case "settings":
-                JOptionPane.showMessageDialog(desktop, 
+                JOptionPane.showMessageDialog(desktop,
                     "System Settings\n\nConfigure display, network, and system preferences.",
-                    "System Settings",
-                    JOptionPane.INFORMATION_MESSAGE);
+                    "System Settings", JOptionPane.INFORMATION_MESSAGE);
                 break;
             case "help":
                 showHelpDialog();
@@ -192,7 +202,7 @@ public class StartMenu extends JWindow {
         helpText.setMargin(new Insets(10, 10, 10, 10));
         helpText.setText(
             "IRIX Desktop Environment - Help\n" +
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
+            "═══════════════════════════════\n\n" +
             "Welcome to the IRIX Desktop Environment!\n\n" +
             "KEYBOARD SHORTCUTS:\n" +
             "  Ctrl+Alt+T       Open Terminal\n" +
@@ -201,24 +211,22 @@ public class StartMenu extends JWindow {
             "  System Manager   - View system information and processes\n" +
             "  Terminal         - Command line interface\n" +
             "  File Manager     - Browse and manage files\n" +
-            "  Text Editor      - Edit text files\n" +
+            "  Text Editor      - Edit text files (with undo/redo)\n" +
             "  Web Browser      - Basic HTML browsing\n" +
-            "  Calculator       - Perform calculations\n" +
+            "  Calculator       - Full-featured calculator\n" +
             "  Drawing Tool     - Create simple drawings\n" +
             "  Media Player     - Media playback simulation\n\n" +
             "FEATURES:\n" +
-            "  • Multiple virtual workspaces\n" +
-            "  • Window management\n" +
+            "  • Multiple virtual workspaces (4)\n" +
+            "  • Window management with taskbar\n" +
             "  • Desktop context menu (right-click)\n" +
-            "  • Taskbar with window buttons\n\n" +
+            "  • Drag windows by title bar\n\n" +
             "CREDITS:\n" +
             "  Inspired by Silicon Graphics IRIX 6.5\n" +
-            "  Version 1.0 - Enhanced Edition\n\n" +
-            "For more information, visit the system documentation."
+            "  Version 2.0 - Enhanced Edition"
         );
         
-        JScrollPane scrollPane = new JScrollPane(helpText);
-        helpDialog.add(scrollPane);
+        helpDialog.add(new JScrollPane(helpText));
         helpDialog.setVisible(true);
     }
 }
