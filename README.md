@@ -2,7 +2,7 @@
 
 <BR>
 
-# Versions for PICO 2 W are coming.
+# Versions for PICO 2 W have been uploaded. More testing will be required.
 
 <BR>
 
