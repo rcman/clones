@@ -1,0 +1,24 @@
+[Unit]
+Description=XENIX Telnet Server
+After=network.target
+
+[Service]
+Type=simple
+User=xenix
+Group=xenix
+ExecStart=/usr/local/bin/xenix_server
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xenix
+StateDirectory=xenix
+
+[Install]
+WantedBy=multi-user.target
