@@ -1,0 +1,4488 @@
+
+; S00060-H / MPU: SC44125P, compiler: THRsim11
+
+; Westinghouse Field Configuration Terminal - unit 1993D40G06 (12.5kHz)
+
+; EPROMS: 2732
+; U11 label: S00060G - U11 / 5553C01G17 - G01
+; U17 label: S00060G - U17 / 5553C01G18 - G01
+
+; Rearrangement and cleanup of Rev G code
+
+; Standard 8-bit architecture with SRAM
+
+; ---------- Product notes
+
+; The FCT is a portable unit for servicing LMTs / MCTs / DCTs
+
+; Unit contains an LMT-2 board set, assembled as two panels (A/C, B/D)
+; Unit also has an interface board, display board, and power distribution board
+; LMT-2 board set is configured to use two 2732 EPROMs (equivalent to one 2764)
+; Interface between external boards and LMT-2 core is via sockets in place of NVRAM ICs
+; NVRAM is relocated to interface board, and the address range is split in two:
+; RAM is constrained to 0C00-0C7F, allowing a 74LS138 to reside at 0CF8-0CFF
+; LMT-2 board set also has other mods to disable or reconfigure circuits as needed
+
+; LMT-2 core is 1997D46G10 (12.5, 240V) - 9.6kHz variant is currently unknown (-G11?)
+; Display board (8279, 7447s, etc.) plugs into interface board via 50-pin ribbon cable
+
+; ---------- Variables
+
+; Hardware addresses (allows for relocation if simulating with newer micros)
+; Address allocation is due to partial address decoding
+
+mc6840       EQU   0 ; Programmable Timer Module
+mc6821       EQU   12 ; Peripheral Interface Adapter
+ramLo        EQU   128 ; MC6810 SRAM
+ramHi        EQU   3072 ; HM6561 x 2
+
+; MC6840 Programmable Timer
+
+ptmCtl0      EQU   mc6840   ; Control register: Timer 1 and Timer 3
+ptmCtl1      EQU   mc6840+1 ; Control register: Timer 2
+ptmTm1       EQU   mc6840+2 ; Timer 1 - Programmable delay
+ptmTm2       EQU   mc6840+4 ; Timer 2 - drives MPU's NMI line
+ptmTm3       EQU   mc6840+6 ; Timer 3 - XOR'd with PIA PA1 for output data stream
+;
+; Control register explanation
+;
+; bit 7: Timer X Output; 0: disable, 1: enable
+;
+; bit 6: Timer X IRQ connection; 0: disable, 1: enable
+;
+; bits 5 - 1: Except when resetting, code always writes these bits: (0 1 0 0 1)
+;
+; The resulting configuration:
+; Continuous mode, high-low on Gx pins (all tied to ground) or /RST resets chip
+; Counters run in 16-bit mode
+; All timers are synced to the main clock (E pin)
+; 
+; bit 0: Special case per timer
+; Timer 1: Reset bit; 0: timers allowed to run, 1: set to latched values
+; Timer 2: Select timer called by control register 0; 0: Timer 3, 1: timer 1
+; Timer 3: Timer 3 divide by 8 prescaler; always set to 0: disabled, (1: enabled)
+
+; MC6821 Peripheral Intf Adapter
+
+piaPortA     EQU   mc6821
+piaCtlA      EQU   mc6821+1
+piaPortB     EQU   mc6821+2
+piaCtlB      EQU   mc6821+3
+;
+; PIA pin definitions (pins not used in this configuration are not listed)
+;
+; Port A
+; PA0  Input; data from receiver (Panel A)
+; PA1  Output; XOR'd with PTM timer 3 before going to Panel B
+; PA2  Output; to panel B via panel D (transmitter enable / active high)
+; PA3  No longer used. Trace on Panel D is bridged to PA2 instead
+; PA4  Output; Initialization Enable signal to Panel D
+;
+; Port B
+; PB0  Used for frequency setting code (similar to RPT-900 / 1994D54G0x?)
+
+; Low RAM (MC6810: 128 x 8 SRAM / $0080 - $00FF)
+
+bchSum       EQU   ramLo ; BCH checksum - data is good if value remains 0 after check
+byteNow      EQU   ramLo+2 ; Current incoming byte (bit stream)
+byteLast     EQU   ramLo+3 ; Most recently completed byte (bit stream)
+byteOld      EQU   ramLo+4 ; Previously completed byte (bit stream)
+valueIi      EQU   ramLo+5 ; Raw vector data - fundamental, 0 degree
+valueQi      EQU   ramLo+6 ; Raw vector data - fundamental, 90 degree
+valueI2i     EQU   ramLo+7 ; Raw vector data - 2nd harmonic, 0 degree
+valueQ2i     EQU   ramLo+8 ; Raw vector data - 2nd harmonic, 90 degree
+avgI2H       EQU   ramLo+9 ; Running average - high byte of vector I
+avgQ2H       EQU   ramLo+10 ; Running average - high byte of vector Q
+avgI2L       EQU   ramLo+11 ; Running average - low byte of vector I
+avgQ2L       EQU   ramLo+12 ; Running average - low byte of vector Q
+avgQ20       EQU   ramLo+13 ; Previous value of Q2H - used for setting sgnFlag
+vectorI      EQU   ramLo+14 ; Calculated vector - 0 degrees
+vectorQ      EQU   ramLo+15 ; Calculated vector - 90 degrees
+sgnFlag      EQU   ramLo+16 ; Flag to capture polarity transitions on vector Q
+sigLevel     EQU   ramLo+17 ; Received signal level (9 is the cutoff for a valid signal)
+vectorSum    EQU   ramLo+18 ; Output byte of phase detector
+temp1        EQU   ramLo+19 ; Scratchpad byte - interrupt
+temp2        EQU   ramLo+20 ; Scratchpad byte - interrupt
+mTable1      EQU   ramLo+24 ; (4 bytes) Table - convert vectorSum values into bits
+mTable2      EQU   ramLo+28 ; (4 bytes) Table - convert vectorSum values into bits
+msgTbl       EQU   ramLo+32 ; (22 bytes) In / out message buffer (receive is 6 bytes max)
+msgBits      EQU   ramLo+54 ; Number of bits in message
+xmitStatus   EQU   ramLo+55 ; Transmitter status flag
+xmitByte     EQU   ramLo+56 ; Carrier segment counter
+keyMask      EQU   ramLo+57 ; Used to enable function keys and handles display shifting
+uutType      EQU   ramLo+59 ; What is being tested: 1 = LMT-1xx, 2 = LMT-2 / MCT, 4 = DCT
+dataNum      EQU   ramLo+60 ; Last number pressed, derived from dataKey
+dataKey      EQU   ramLo+61 ; Last key pressed (matrix - 0x00 to 0x1B)
+waitTime     EQU   ramLo+62 ; Delay counter (1/16 second per count; 16 = 1 second)
+temp6        EQU   ramLo+63 ; Scratchpad byte - application
+temp7        EQU   ramLo+64 ; Scratchpad byte - application
+temp8        EQU   ramLo+65 ; Scratchpad byte - application
+temp9        EQU   ramLo+66 ; Scratchpad byte - application
+rlyTemp      EQU   ramLo+67 ; Temporary storage of pre-test state of relays
+rlyLatch     EQU   ramLo+68 ; Temporary storage of latched relay state
+addrL        EQU   ramLo+69 ; Address (24 bits - big endian)
+addrM        EQU   ramLo+70
+addrH        EQU   ramLo+71
+xmitFlag     EQU   ramLo+73 ; Activates transmitter
+headerBit    EQU   ramLo+74 ; Used to count off bits in preamble
+mSum_peak    EQU   ramLo+75 ; Highest working value - mTable1 / mTable 2
+mValue_raw   EQU   ramLo+77 ; Value to carry into M tables
+msgStart     EQU   ramLo+78 ; Flag to mark end of message preamble
+installFlag  EQU   ramLo+79 ; used to illuminate or clear Install LED
+bitCount     EQU   ramLo+80 ; Flag to mark end of each received bit interval
+msgEnd       EQU   ramLo+81 ; Flag to mark end of received message
+countPulse   EQU   ramLo+82 ; Running counter - bit stream (8; byteNow -> byteLast)
+countPhase   EQU   ramLo+83 ; Running counter - carrier pulse interval (4)
+countBit     EQU   ramLo+84 ; bit interval counter (-1, 0-5)
+countSum     EQU   ramLo+85 ; Running counter for second half of mTable calculations
+M_index      EQU   ramLo+86 ; Pointer for mTable1 / mTable2 (0-3; 2 byte)
+mSum_last    EQU   ramLo+90 ; Previous working value - mTable1 / mTable 2
+mSum_Old     EQU   ramLo+91 ; 2nd previous working value - mTable1 / mTable 2
+mSum_Cur     EQU   ramLo+92 ; Current working value - mTable1 / mTable 2
+dctTemp      EQU   ramLo+95 ; placeholder while preparing DCT Analog data for display
+optbyte      EQU   ramLo+97 ; test validation byte from LMT-2 / DCT
+testSet      EQU   ramLo+98 ; Selects test suite for 2-way units
+
+; Processor stack sits at end of low RAM ($00FF - $00E3)
+stack        EQU   ramLo+127
+
+; High RAM (HM-6561 NVRAM x 2 / $0C00 - $0C7F)
+; RAM actually resides on Interface board
+; Relocation allows FCT boards to link into LMT-2 board set
+; RAM on interface board has A7 grounded, freeing upper half for 74LS138 selector
+
+msgLen       EQU   ramHi ; (2 bytes) Message length (upper byte is 0)
+fctCtlNum    EQU   ramHi+3 ; FCT Control Number - sets post-test status of relay
+rlyNum       EQU   ramHi+6 ; Number of relays to test
+uutFWbyte    EQU   ramHi+7 ; Firmware number in unit being tested
+uutGroup     EQU   ramHi+8 ; Flag to further direct tests (based on UUT firmware number)
+uutFWspec    EQU   ramHi+9 ; Firmware revision in unit being tested
+bcdData10    EQU   ramHi+11 ; BCD data buffer (8 digits, packed - big endian)
+bcdData32    EQU   ramHi+12
+bcdData54    EQU   ramHi+13
+bcdData76    EQU   ramHi+14
+addrL4       EQU   ramHi+15 ; Address, shifted left 2 bits
+addrM4       EQU   ramHi+16
+addrH4       EQU   ramHi+17
+lmtTestMd    EQU   ramHi+18 ; Flag to remember or set UUT test mode
+f2binary     EQU   ramHi+19 ; (2 bytes) Location of source binary number
+f2BCD        EQU   ramHi+21 ; (2 bytes) Location of packed BCD number after conversion
+f2bitpos     EQU   ramHi+23 ; Bit marker for binary / BCD conversion
+f2bytes      EQU   ramHi+24 ; Number of bytes (plus 1) to convert to packed BCD
+f2bits       EQU   ramHi+25 ; Number of bits to convert from binary to packed BCD
+dctData1     EQU   ramHi+26 ; local copy of DCT upper RAM $0C3A & test 75, 76 scratchpad
+dctData2     EQU   ramHi+27 ; local copy of DCT upper RAM $0C3B
+dctData3     EQU   ramHi+28 ; local copy of DCT upper RAM $0C3C
+dctData4     EQU   ramHi+29 ; local copy of DCT upper RAM $0C3D
+dctTouStat   EQU   ramHi+30
+rlyError     EQU   ramHi+32 ; count relay failure
+rlyBits      EQU   ramHi+33 ; evaluate relay closures
+
+; Readout is 8 bytes, stored big-endian but read / displayed little-endian
+; Aliases for upper half of display RAM
+; Sequence of readout bytes (16) are mapped to hardware
+
+readout      EQU   ramHi+105 ; Main readout (8 digits)
+testOne      EQU   readout+8 ; Test number (stored big-endian, displayed little-endian)
+testTen      EQU   readout+9
+ledRlyA      EQU   readout+10 ; Relay A status LED
+ledRlyB      EQU   readout+11 ; Relay B status LED
+ledRlyC      EQU   readout+12 ; Relay C status LED
+ledRlyD      EQU   readout+13 ; Relay D (or latched rly) status LED
+ledInstall   EQU   readout+14 ; Install mode LED
+ledStat      EQU   readout+15 ; Test pass / fail LED
+
+; values written to LED: F = off, 4 = fail, 7 = pass, 8 = all on
+; LEDs are wired to specific segments on the 7447 decoder, hence these values
+
+; Function selector (74LS138 on FCT Logic Board / $0CF0 - $0CFF)
+; This is why the upper 128 bytes of High RAM are blocked out
+
+testsw       EQU   ramHi+249 ; Tester mode switch; Pos 1: 11, pos 2: 10, pos 3: 01
+kbEIRQ       EQU   ramHi+250 ; 8279 keyboard IRQ
+rlyStatus    EQU   ramHi+252 ; External contact closures (bit 3 / Rly D - bit 0 / Rly A)
+cfgjpr       EQU   ramHi+253 ; Mode jumpers to identify test cable set
+kdData       EQU   ramHi+254 ; 8279 data port (A0 = low)
+kdCmd        EQU   ramHi+255 ; 8279 command port (A0 = high)
+
+; relays / cfg jumpers: open = 0, closed = 1 (because of '368)
+
+; ---------- Start of ROM code
+
+        ORG   $E000
+
+; Setup begins
+
+Reset
+        LDS   #stack
+
+; Configure MC6821 PIA
+
+        LDAA  #$30
+        STAA  piaCtlA
+        STAA  piaCtlB
+        LDD   #$FEFF
+        STAA  piaPortA ; all outputs except PA0
+        STAA  piaPortB ; all outputs (inactive)
+        LDAA  #$34
+        STAA  piaCtlA
+        STAA  piaCtlB
+        LDD   #$1000
+        STAA  piaPortA ; PA4 is active low so we start with it high
+        STAA  piaPortB
+
+; Configure MC6840 timer
+
+        LDAA  piaPortb
+        ANDA  #$01
+        BNE   G02_Sel
+        LDD   #$0027 ; 12.5kHz
+        STD   ptmtm3
+        LDD   #$0199
+        STD   ptmtm2
+        BRA   ptmsetup
+G02_Sel
+        LDD   #$0033 ; 9.615kHz
+        STD   ptmtm3
+        LDD   #$01AC
+        STD   ptmtm2
+ptmsetup
+        LDD   #$2133
+        STD   ptmTm1
+        LDAB  #$12
+        STAB  ptmCtl1
+        LDAA  #$12
+        STAA  ptmCtl0
+        LDAB  #$13
+        STAB  ptmCtl1
+        LDAA  #$92
+        STAA  ptmCtl0
+        LDAA  #$D3
+        STAA  ptmCtl1
+
+; Initialize variables
+        LDAA  #$04
+        STAA  countBit
+        CLR   countPulse
+        CLR   countPhase
+        LDX   #mTable1+3
+        STX   M_index
+        LDAA  #$00
+        STAA  msgLen
+        STAA  bchSum
+        STAA  msgBits
+        LDAA  #$01
+        STAA  xmitByte
+        STAA  msgEnd
+        CLR   keyMask
+        CLR   uutType
+        CLR   dataNum
+        CLR   xmitStatus
+        CLR   bitCount
+        CLR   uutGroup
+        CLR   xmitFlag
+        CLR   addrL4
+        CLR   addrM4
+        CLR   addrH4
+
+; Now we blank the display and turn off the Install LED
+        JSR   dispBlank
+        LDAA  #$0F
+        STAA  ledInstall
+        JSR   dispRefresh
+
+; Setup ends
+
+; Main loop
+
+; Step 1 - Validate switch and jumper settings
+; If UUT jumpers and FCT switch match, set uutType accordingly
+; 1 = LMT-1xx, 2 = LMT-2 / MCT-2xx, 4 = DCT
+
+        LDD   #$0100
+        STD   testOne
+        JSR   dispRefresh
+        LDAA  #$04
+        STAA  waitTime
+        JSR   timer
+test01_1
+        LDAA  cfgjpr
+        ANDA  #$03
+        LDAB  testsw
+        ANDB  #$03
+        CBA
+        BEQ   test01_3
+        LDAA  #$04
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$04
+        STAA  waitTime
+        JSR   timer
+        JMP   test01_1
+
+test01_3
+        LDAA  #$0F
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  testsw
+        ANDA  #$03
+        CMPA  #$03
+        BNE   test01_5
+        INCA
+test01_5
+        STAA  uutType
+
+; Step 2 - setup / full 7+1 display
+
+        JSR   dispBlank
+        LDD   #$0200
+        STD   testOne
+        CLR   readout
+        CLR   readout+1
+        CLR   readout+2
+        CLR   readout+3
+        CLR   readout+4
+        CLR   readout+5
+        CLR   readout+6
+        CLR   readout+7
+        JSR   dispRefresh
+        LDAA  #$AA
+        STAA  keyMask
+
+; Main keypad loop begins
+
+; Scan for function keys - keyMask bits determine whether to accept that key
+
+loopMain
+        JSR   getKey
+        LDAB  keyMask
+        BITB  #$80
+        BEQ   main02
+        LDAA  dataKey
+        CMPA  #$0B ; Check key
+        BNE   main02
+        JMP   main00
+main02
+        BITB  #$40
+        BEQ   main03
+        LDAA  dataKey
+        CMPA  #$13 ; Repeat key
+        BNE   main03
+        JMP   main05
+main03
+        BITB  #$20
+        BEQ   main04
+        LDAA  dataKey
+        CMPA  #$1A ; Enter key
+        BNE   main04
+        JMP   main20
+main04
+        BITB  #$10
+        BEQ   main08
+        LDAA  dataKey
+        CMPA  #$1B ; Next key
+        BNE   main08
+        JMP   main05
+main08
+        BITB  #$08
+        BEQ   main09
+        LDAA  dataKey
+        CMPA  #$03 ; Test key
+        BNE   main09
+        JMP   main16
+
+; Was a number entered? If none (-1), return to start of the main loop
+
+main09
+        LDAA  dataNum
+        BMI   loopMain
+
+; A number was entered, so use keyMask bits 0 / 1 to shift accordingly
+
+        BITA  #$02
+        BNE   main12
+        BITA  #$01
+        BEQ   main11
+        BRA   main10
+
+main12
+        LDAA  readout+6
+        STAA  readout+7
+        LDAA  readout+5
+        STAA  readout+6
+        LDAA  readout+4
+        STAA  readout+5
+        LDAA  readout+3
+        STAA  readout+4
+        LDAA  readout+2
+        STAA  readout+3
+main11
+        LDAA  readout+1
+        STAA  readout+2
+main10
+        LDAA  readout
+        STAA  readout+1
+        LDAA  dataNum
+        STAA  readout
+        JSR   dispRefresh
+        JMP   loopMain
+
+; Handle check key press
+; Clear (zero out) display based on keyMask bits 0/1
+
+main00
+        CLR   readout
+        CLR   readout+1
+        ANDB  #$03
+        BEQ   main01
+        CLR   readout+2
+        CMPB  #$01
+        BEQ   main01
+        CLR   readout+3
+        CLR   readout+4
+        CLR   readout+5
+        CLR   readout+6
+        CLR   readout+7
+main01
+        JSR   dispRefresh
+        JMP   loopMain
+
+; Handle Next or Repeat key press
+; Exit to test suites (1-way, 2-way, or short read)
+
+main05
+        CLR   keyMask
+        LDAB  uutType
+        CMPB  #$01
+        BNE   main06
+        JMP   test35a
+
+main06
+        LDAB  testSet
+        CMPB  #$08
+        BNE   main07
+        JMP   test25b
+
+main07
+        JMP   suite2
+
+; Handle test key press
+; Determine whether to continue to quick read routine or jump to lamp test
+
+main16
+        LDAA  testOne
+        CMPA  #$02
+        BNE   main14
+        LDAA  testTen
+        BNE   main14
+        LDAA  #$00
+        LDX   #readout+7
+main17
+        ADDA  $00,X
+        DEX
+        CPX   #readout
+        BNE   main17
+        CMPA  #$00
+        BEQ   main14
+        ANDA  #$0F
+        CMPA  readout
+        BEQ   main19
+        LDAA  #$04
+        STAA  ledStat
+        JSR   dispRefresh
+        JMP   loopMain
+
+main19
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$04
+        STAA  waitTime
+        JSR   timer
+        LDAA  #$08
+        STAA  testSet
+        JSR   addrBin
+        JSR   addrX4
+
+; Now we jump to test 25 (condensed version)
+
+        JMP   test25b
+
+main14
+        JMP   lampTest
+
+; Handle enter key press
+
+; Check display length then do checksum
+
+main20
+        LDX   #readout+7
+        LDAA  readout+7
+        CMPA  #$0F
+        BNE   main35
+        LDX   #readout+2
+main35
+        LDAA  #$00
+main21
+        ADDA  $00,X
+        DAA
+        DEX
+        CPX   #readout
+        BNE   main21
+        ANDA  #$0F
+        CMPA  readout
+        BEQ   main22
+        LDAA  #$04
+        STAA  ledStat
+        JSR   dispRefresh
+        JMP   loopMain
+
+; Checksum was good - keyMask bits 0 / 1 determine where we go next
+
+main22
+        LDAA  keyMask
+        BITA  #$01
+        BEQ   main23
+        JMP   main31
+
+main23
+        BITA  #$02
+        BEQ   main24
+
+; Step 2 - process data / convert unpacked BCD to 24-bit binary
+
+        JSR   addrBin
+
+; Step 3 - setup / abbreviated 2+1 display
+
+        JSR   dispBlank
+        LDD   #$0300
+        STD   testOne
+        CLR   readout
+        CLR   readout+1
+        CLR   readout+2
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$A9
+        STAA  keyMask
+        JMP   loopMain
+
+; Step 3 - process data
+
+; FCT Control Number determines post-test handling of latched relay:
+; 0 = no latched relay present
+; 1 = remember existing state and restore after test
+; 2 = leave open after test
+; 3 = leave closed after test
+; if FCT control number isn't 0, we omit Relay D from timed relay tests
+
+main31
+        LDAA  readout+2
+        ANDA  #$07
+        STAA  rlyNum
+        LDAA  readout+1
+        ANDA  #$03
+        STAA  fctCtlNum
+        BEQ   main32
+        DEC   rlyNum
+
+; Are we testing LMT-1xx units? If so, skip Step 4
+
+main32
+        LDAA  #$00
+        STAA  installFlag
+        LDAA  uutType
+        CMPA  #$01
+        BEQ   main27
+
+; Step 4 - setup / single 1+1 display
+
+        JSR   dispBlank
+        LDD   #$0400
+        STD   testOne
+        CLR   readout
+        CLR   readout+1
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$A0
+        STAA  keyMask
+        JMP   loopMain
+
+; Step 4 - process data, set Install LED
+
+main24
+        LDAA  readout+1
+        CMPA  #$01 ; install
+        BNE   main26
+        LDAA  #$01
+        STAA  testSet
+        STAA  installFlag
+        BRA   main27
+main26
+        CMPA  #$03 ; test
+        BNE   main28
+        LDAA  #$02
+        STAA  testSet
+        BRA   main27
+main28
+        CMPA  #$07 ; read / test
+        BNE   main29
+        LDAA  #$00
+        STAA  testSet
+        BRA   main27
+main29
+        CMPA  #$09 ; DCT
+        BNE   main30
+        LDAA  #$03
+        STAA  testSet
+        BRA   main27
+main30
+        LDAA  #$04
+        STAA  ledStat
+        JSR   dispRefresh
+        JMP   loopMain
+
+main27
+        LDAA  #$0F
+        LDAB  installFlag
+        BEQ   main25
+        LDAA  #$08
+main25
+        STAA  ledInstall
+
+; Step 5 - setup / display test number only, press NEXT to begin automated script
+
+        JSR   dispBlank
+        LDD   #$0500
+        STD   testOne
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  keyMask
+        JMP   loopMain
+
+; End of main loop
+
+; Lamp test routine - show all segments, firmware revision, then restarts
+
+lampTest
+        LDAA  #$08 ; light all LED segments
+        STAA  readout
+        STAA  readout+1
+        STAA  readout+2
+        STAA  readout+3
+        STAA  readout+4
+        STAA  readout+5
+        STAA  readout+6
+        STAA  readout+7
+        STAA  testOne
+        STAA  testTen
+        STAA  ledRlyA
+        STAA  ledRlyB
+        STAA  ledRlyC
+        STAA  ledRlyD
+        STAA  ledInstall
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$2E
+        STAA  waitTime
+        JSR   timer
+        JSR   dispBlank ; now display firmware rev
+        LDAA  #$FF
+        STAA  ledInstall
+        LDAA  #$08
+        STAA  readout+2
+        LDAA  #$00
+        STAA  readout+5
+        LDAA  #$06
+        STAA  readout+6
+        LDAA  #$00
+        STAA  readout+7
+        JSR   dispRefresh
+        LDAA  #$24
+        STAA  waitTime
+        JSR   timer
+        JMP   Reset ; reboot
+
+; Error handler
+; Possible to use text messages with other languages?
+
+error1
+        LDAA  #$01 ; No transmit from FCT
+        BRA   err_show
+
+error2
+        LDAA  #$02 ; No response from UUT
+        BRA   err_show
+
+error3
+        LDAA  #$03 ; Incomplete response from UUT
+        BRA   err_show
+
+error4
+        LDAA  #$04 ; BCH checksum error in UUT response
+        BRA   err_show
+
+error5
+        LDAA  #$05 ; Other data error
+        BRA   err_show
+
+error6
+        LDAA  #$06 ; FCT number / hardware mismatch
+err_show
+        STAA  readout
+        LDAA  #$04
+        STAA  ledStat
+        JSR   dispRefresh
+        CLR   xmitFlag
+        LDAA  #$48
+        STAA  keyMask
+        JMP   loopMain
+
+; LMT-1xx test suite
+
+; Test 35 (1-way): Test timed relays (A - D)
+
+test35a
+        JSR   dispBlank
+        LDD   #$0503
+        STD   testOne
+        JSR   dispRefresh
+
+; send message to UUT - shed relays
+        JSR   msg1way
+        LDAA  #$E0
+        STAA  msgTbl+4
+        JSR   msgCmd
+
+; for some reason we need to wait a few seconds on 1-way units,
+; so we flash the test LEDs for a bit in the meantime
+
+        LDAA  #$08
+        STAA  temp7
+test35a_01
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+        LDAA  #$08
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+        LDAA  #$0F
+        STAA  ledStat
+        JSR   dispRefresh
+        DEC   temp7
+        BNE   test35a_01
+        LDAA  rlyStatus
+        STAA  rlyTemp
+
+; send message to UUT - restore relays
+
+        JSR   msg1way
+        LDAA  #$10
+        STAA  waitTime
+        JSR   msgCmd
+
+; flash the test LEDs for a bit again
+
+        LDAA  #$10
+        STAA  temp7
+test35a_02
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+        LDAA  #$08
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+        LDAA  #$0F
+        STAA  ledStat
+        JSR   dispRefresh
+        DEC   temp7
+        BNE   test35a_02
+
+; Now we evaluate the relays - did they open / close correctly?
+
+        CLR   rlyError
+        LDAA  rlyStatus
+        EORA  rlyTemp
+        STAA  rlyBits
+        LDAB  rlyNum
+        CMPB  #$04
+        BEQ   test35a_03
+        CMPB  #$03
+        BEQ   test35a_05
+        CMPB  #$02
+        BEQ   test35a_07
+        CMPB  #$01
+        BEQ   test35a_09
+        BRA   test35a_11
+
+test35a_03
+        LDAB  #$07
+        BITA  #$08
+        BNE   test35a_04
+        INC   rlyError
+        LDAB  #$04
+test35a_04
+        STAB  ledRlyD
+test35a_05
+        LDAB  #$07
+        BITA  #$04
+        BNE   test35a_06
+        INC   rlyError
+        LDAB  #$04
+test35a_06
+        STAB  ledRlyC
+test35a_07
+        LDAB  #$07
+        BITA  #$02
+        BNE   test35a_08
+        INC   rlyError
+        LDAB  #$04
+test35a_08
+        STAB  ledRlyB
+test35a_09
+        LDAB  #$07
+        BITA  #$01
+        BNE   test35a_10
+        INC   rlyError
+        LDAB  #$04
+test35a_10
+        STAB  ledRlyA
+test35a_11
+        LDAB  #$07
+        LDAA  rlyError
+        BEQ   test35a_12
+        LDAB  #$04
+test35a_12
+        STAB  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+
+test35a_18
+        JSR   getKey
+        CMPA  #$13 ; Repeat key
+        BNE   test35a_19
+        JMP   test35a
+
+test35a_19
+        CMPA  #$1B ; Next key
+        BNE   test35a_18
+
+; checkpoint - test routing
+
+suite1_1
+        LDAA  fctCtlNum
+        BNE   test40a
+        JMP   test40a_06
+
+; Test 40 (one-way): Latched relay D
+
+test40a
+        JSR   dispBlank
+        LDD   #$0004
+        STD   testOne
+        JSR   dispRefresh
+        LDAA  rlyStatus
+        STAA  rlyTemp
+
+; close relay
+
+        JSR   msg1way
+        LDAA  #$C0
+        STAA  msgTbl+4
+        JSR   msgCmd
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+
+        LDAA  rlyStatus
+        ANDA  #$04
+        STAA  rlyLatch
+
+; open relay
+
+        JSR   msg1way
+        LDAA  #$A0
+        STAA  msgTbl+4
+        JSR   msgCmd
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+
+        LDAA  rlyStatus
+        COMA
+        ANDA  #$04
+        CMPA  rlyLatch
+        BEQ   test40a_07
+        LDAA  #$04
+        STAA  ledRlyD
+        STAA  ledStat
+        JSR   dispRefresh
+        BRA   test40a_06
+
+test40a_07
+        LDAA  #$07
+        STAA  ledRlyD
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  fctCtlNum
+        CMPA  #$03
+        BEQ   test40a_05
+        CMPA  #$02
+        BEQ   test40a_06
+        LDAA  rlyTemp
+        BITA  #$04
+        BEQ   test40a_06
+
+test40a_05
+        JSR   msg1way
+        LDAA  #$C0
+        STAA  msgTbl+4
+        JSR   msgCmd
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+
+; Done. return to main loop
+
+test40a_06
+        LDAA  #$48
+        STAA  keyMask
+        JMP   loopMain
+
+; end of LMT-1xx tests
+
+; Two-way unit test suite (LMT-2 / MCT-2xx / DCT-501)
+
+; checkpoint - test routing
+
+suite2
+        LDAA  testSet
+        CMPA  #$01
+        BEQ   test15
+        JMP   test20
+
+; Test 15: Download address to UUT
+
+test15
+        JSR   dispBlank
+        LDD   #$0501
+        STD   testOne
+        JSR   dispRefresh
+        LDX   #msg01
+        JSR   msgLoad
+
+; Address: Emetcon test address + %10 / pointer: $22
+
+; 8th byte = 1100 + upper nybble of addrH
+; 9th byte = lower nybble of addrH + upper nybble of addrM
+; 10th byte = lower nybble of addrM + upper nybble of addrL
+; 11th byte = lower nybble of addrL + upper nybble of inverted addrH
+; 12th byte = lower nybble of inverted addrH + upper nybble of inverted addrM
+; 13th byte = lower nybble of inverted addrM
+; 15th byte = inverted addrL
+
+        LDAA  addrH
+        LDAB  addrM
+
+        ASRA
+        RORB
+        ASRA
+        RORB
+        ASRA
+        RORB
+        ASRA
+        RORB
+
+        ANDA  #$CF
+        ORAA  #$C0
+        STAA  msgTbl+8
+        STAB  msgTbl+9
+        LDAB  addrL
+        LDAA  addrM
+        ASLD
+        ASLD
+        ASLD
+        ASLD
+        STAA  msgTbl+10
+        STAB  msgTbl+11
+        LDAA  addrH
+        COMA
+        LSRA
+        LSRA
+        LSRA
+        LSRA
+        ORAA  msgTbl+11
+        STAA  msgTbl+11
+        LDAA  addrH
+        LDAB  addrM
+
+        ASRA
+        RORB
+        ASRA
+        RORB
+        ASRA
+        RORB
+        ASRA
+        RORB
+
+        COMB
+        STAB  msgTbl+12
+        LDAA  addrM
+        COMA
+        ASLA
+        ASLA
+        ASLA
+        ASLA
+        STAA  msgTbl+13
+        LDAA  addrL
+        COMA
+        STAA  msgTbl+15
+
+; Enable Init Enable line (active low)
+
+        LDAA  piaPortA
+        ANDA  #$EF
+        STAA  piaPortA
+
+; send message (via interrupt)
+
+        LDAA  #$01
+        STAA  xmitStatus
+        STAA  xmitFlag
+        LDAA  #$24
+        STAA  waitTime
+        JSR   timer
+        LDAA  xmitStatus
+        BLE   errchk10
+        JMP   error1 ; no transmit
+
+errchk10
+        LDAA  #$03
+        STAA  waitTime
+        JSR   timer
+
+; Deactivate Init Enable line
+
+        LDAA  piaPortA
+        ORAA  #$10
+        STAA  piaPortA
+
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+
+; Test 20: Read / verify UUT address
+
+test20
+        JSR   dispBlank
+        LDD   #$0002
+        STD   testOne
+        JSR   dispRefresh
+        JSR   msg2way
+        LDAA  #$22
+        STAA  msgTbl+6 ; data pointer
+        LDAA  #$40
+        STAA  msgTbl+7 ; response flag
+        TST   testSet
+        BNE   test20_01
+
+; we are using the Emetcon test address (1398101) instead
+
+        LDAA  #$15
+        STAA  addrH
+        LDAA  #$55
+        STAA  addrM
+        LDAA  #$55
+        STAA  addrL
+
+; Enable Init Enable line (active low)
+
+        LDAA  piaPortA
+        ANDA  #$EF
+        STAA  piaPortA
+
+test20_01
+        JSR   addrX4
+        LDAA  addrH4
+        STAA  msgTbl+3
+        LDAA  addrM4
+        STAA  msgTbl+4
+        LDAB  addrL4
+        ORAB  #$02
+        STAB  msgTbl+5
+
+; Send the command and response flag to the UUT
+
+test20_02
+        LDAA  #$01
+        STAA  xmitStatus
+        STAA  xmitFlag
+        LDAA  #$05
+        STAA  waitTime
+        JSR   timer
+        LDAA  msgBits
+        CMPA  #$41
+        BMI   test20_03
+        JMP   error1 ; no transmit
+
+; Transmission is complete once msgBits runs to 0
+
+test20_03
+        TST   msgBits
+        BNE   test20_03
+
+; Set receive data parameters (different from standard routine)
+
+        LDAA  #$0D
+        STAA  msgLen+1
+        LDAA  #$02
+        STAA  xmitByte
+
+; Deactivate Init Enable line
+
+        LDAA  piaPortA
+        ORAA  #$10
+        STAA  piaPortA
+
+; Begin extended data retrieval routine
+
+        LDAA  #$07
+        STAA  waitTime
+        JSR   timer
+        LDAA  msgBits
+        BNE   test20_04
+        JMP   error2 ; no response
+
+test20_04
+        LDAB  msgBits
+        CMPB  #$34
+        BNE   test20_04
+        CLR   msgBits
+        TST   bchSum
+        BEQ   test20_05
+        JMP   error4 ; BCH error
+
+test20_05
+        LDAA  #$05
+        STAA  waitTime
+        JSR   timer
+        TST   msgBits
+        BNE   test20_06
+        JMP   error3 ; incomplete response
+
+; Resume standard data retrieval routine
+
+test20_06
+        LDAB  msgBits
+        CMPB  #$34
+        BNE   test20_06
+        CLR   msgBits
+        TST   bchSum
+        BEQ   test20_07
+        JMP   error4 ; BCH error
+
+test20_07
+        CLR   xmitFlag
+
+; Done with data query; now we validate received data
+
+; First byte - lower nybble of rec'd byte 2, upper nybble of byte 3
+
+        LDAA  msgTbl+2 ; received data
+        LDAB  msgTbl+3 ; received data
+        ASLD
+        ASLD
+        ASLD
+        ASLD
+        TST   testSet
+        BEQ   test20_08
+        CMPA  addrH
+        BEQ   test20_09
+        JMP   error5 ; other data error
+
+test20_08
+        STAA  addrH
+
+; Second byte - lower nybble of rec'd byte 3, upper nybble of byte 4
+
+test20_09
+        LDAA  msgTbl+3 ; received data
+        LDAB  msgTbl+4 ; received data
+        ASLD
+        ASLD
+        ASLD
+        ASLD
+        TST   testSet
+        BEQ   test20_10
+        CMPA  addrM
+        BEQ   test20_11
+        JMP   error5 ; other data error
+
+test20_10
+        STAA  addrM
+
+; Third byte - lower nybble of rec'd byte 4, upper nybble of byte 5
+
+test20_11
+        LDAA  msgTbl+4 ; received data
+        LDAB  msgTbl+5 ; received data
+        ASLD
+        ASLD
+        ASLD
+        ASLD
+        TST   testSet
+        BEQ   test20_12
+        CMPA  addrL
+        BEQ   test20_14
+        JMP   error5 ; other data error
+
+test20_12
+        STAA  addrL
+
+; Now compare the inverted S/N copy
+
+test20_14
+        LDAA  msgTbl+7 ; received data
+        COMA
+        CMPA  addrH
+        BEQ   test20_15
+        JMP   error5 ; other data error
+
+test20_15
+        LDAA  msgTbl+8 ; received data
+        COMA
+        CMPA  addrM
+        BEQ   test20_16
+        JMP   error5 ; other data error
+
+test20_16
+        LDAA  msgTbl+9 ; received data
+        COMA
+        CMPA  addrL
+        BEQ   test20_17
+        JMP   error5 ; other data error
+
+; Done. Determine whether to jump to test 25 or display data
+
+test20_17
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+        TST   testSet
+        BEQ   test20_18
+        JMP   test20_21
+
+test20_18
+        JSR   addrX4
+        LDAA  #$18
+        STAA  f2bits
+        LDAA  #$04
+        STAA  f2bytes
+        LDD   #addrH
+        STD   f2binary
+        LDD   #bcdData76
+        STD   f2BCD
+        JSR   bin2BCD
+        JSR   dispBCD
+        JSR   dispRefresh
+test20_19
+        JSR   getKey
+        CMPA  #$13 ; Repeat key
+        BNE   test20_20
+        JMP   test20
+
+test20_20
+        CMPA  #$1B ; Next key
+        BNE   test20_19
+
+; checkpoint - test routing
+
+test20_21
+        LDAA  testSet
+        CMPA  #$03
+        BNE   test25
+        JMP   errchk07 ; end of test 30
+
+; Test 25: Get hardware ID
+
+test25
+        JSR   dispBlank
+        LDD   #$0502
+        STD   testOne
+        JSR   dispRefresh
+
+; template loads 0 into the pointer byte by default, coincidentally rev / spec address
+
+        JSR   msg2way
+        JSR   msgDataQry
+
+; Error check received message
+
+        LDAA  msgTbl+1 ; received data
+        ANDA  #$1F
+        LDAB  addrM
+        ANDB  #$1F
+        CBA
+        BEQ   test25_03
+        JMP   error5 ; other data error
+
+test25_03
+        LDAA  msgTbl+2 ; received data
+        CMPA  addrL
+        BEQ   test25_02
+        JMP   error5 ; other data error
+
+; Save firmware number and rev from UUT response
+
+test25_02
+        LDAA  msgTbl+3 ; received data
+        STAA  uutFWbyte
+        LDAA  msgTbl+4 ; received data
+        STAA  uutFWspec
+        LDAA  msgTbl+5 ; received data
+        STAA  optByte
+        JSR   getFWRev
+
+; Determine UUT group based on firmware / _ indicates units on hand
+
+        LDAA  uutFWbyte
+        CMPA  #$01 ; S00001 (suspected LMT-1)
+        BEQ   test25_06
+        CMPA  #$24 ; S00036 (LMT-2) _
+        BEQ   test25_06
+        CMPA  #$4A ; S00074 (MCT-212, MCT-213, MCT-22x)
+        BEQ   test25_07
+        CMPA  #$5D ; S00093 (MCT-240, MCT-242)
+        BEQ   test25_07
+        CMPA  #$58 ; S00088 (MCT-210)
+        BEQ   test25_08
+        CMPA  #$5F ; S00095 (MCT-210, MCT-213) _
+        BEQ   test25_08
+        CMPA  #$08 ; S00008 (suspected DCT)
+        BEQ   test25_04
+        CMPA  #$21 ; S00033 (DCT-501)
+        BEQ   test25_04
+
+; Error 7: Firmware is not in lookup table
+
+test25_16
+        LDAA  #$07
+        STAA  readout
+        LDAA  #$04
+        STAA  ledStat
+        JSR   getFWRev
+test25_17
+        JSR   getKey
+        CMPA  #$13 ; Repeat key
+        BNE   test25_18
+        JMP   test25
+
+test25_18
+        CMPA  #$1B ; Next key
+        BNE   test25_17
+
+        LDAA  #$04
+        STAA  uutGroup
+
+        LDAA  testSet
+        CMPA  #$08
+        BNE   test25_14
+        JMP   test45
+
+; Are we testing a DCT?
+
+test25_04
+        LDAA  uutType
+        CMPA  #$04
+        BEQ   test25_14
+        BRA   test25_16
+
+; Set UUT 'group number' based on above table
+
+test25_06
+        LDAA  #$02
+        BRA   test25_09
+
+test25_07
+        LDAA  #$04
+        BRA   test25_09
+
+test25_08
+        LDAA  #$06
+test25_09
+        STAA  uutGroup
+
+; Are we testing a DCT?
+
+        LDAA  uutType
+        CMPA  #$02
+        BEQ   test25_10
+        BRA   test25_16
+
+; Bit 0 of 5th received byte is used to validate correct entry of FCT control number
+
+test25_10
+        LDAA  optbyte
+        BITA  #$01
+        BNE   test25_11
+        LDAA  fctCtlNum ; bit 0 = 0, so fctCtlNum MUST be 0
+        BEQ   test25_14
+        JMP   error6 ; FCT Control number mismatch
+
+test25_11
+        LDAA  fctCtlNum ; bit 0 = 1, so fctCtlNum CANNOT be 0
+        BNE   test25_14
+        JMP   error6 ; FCT Control number mismatch
+
+test25_14
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+
+; checkpoint - test routing (non-install sequence)
+
+        LDAA  testSet
+        CMPA  #$01
+        BNE   test26
+
+; checkpoint - test routing (are we testing a DCT?)
+
+        LDAA  uutType
+        CMPA  #$04
+        BEQ   test25_15
+
+; checkpoint - test routing
+
+        LDAA  uutGroup
+        CMPA  #$02
+        BEQ   test25_15
+        JMP   test28 ; MCT tests
+
+test25_15
+        JMP   test30 ; LMT-2 / DCT tests
+
+; Test 26: Get UUT test mode status (skipped for install sequence)
+
+test26
+        JSR   dispBlank
+        LDD   #$0602
+        STD   testOne
+        JSR   dispRefresh
+        JSR   msg2way
+        LDAA  #$2F
+        STAA  msgTbl+6 ; data pointer
+        JSR   msgDataQry
+        LDAA  msgTbl+3 ; received data
+        STAA  lmtTestMd
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+
+; checkpoint - test routing
+
+        LDAA  lmtTestMd
+        BEQ   test27
+        LDAA  uutType
+        CMPA  #$04
+        BNE   test27
+        JMP   test32_3
+
+; Test 27: Enable test mode in UUT
+
+test27
+        JSR   dispBlank
+        LDD   #$0702
+        STD   testOne
+        JSR   dispRefresh
+        JSR   msg2way
+        LDAA  #$53
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+        JMP   test32_3
+
+; Test 28: MCT related - perhaps for entry of multiplier, Mp, or Kh?
+
+test28
+        JSR   dispBlank
+        LDD   #$0802
+        STD   testOne
+        LDAA  #$00
+        STAA  readout
+        STAA  readout+1
+        STAA  readout+2
+        STAA  readout+3
+        STAA  readout+4
+        STAA  readout+5
+        STAA  readout+6
+        STAA  readout+7
+        JSR   dispRefresh
+test28_01
+        JSR   getKey
+        CMPA  #$0B ; Check key
+        BEQ   test28
+        CMPA  #$1A ; Enter key
+        BEQ   test28_02
+        LDAB  dataNum
+        BMI   test28_01
+
+; Data input is shift key, 3 digits, checksum number
+
+        LDAA  readout+4
+        STAA  readout+6
+        LDAA  readout+3
+        STAA  readout+4
+        LDAA  readout+2
+        STAA  readout+3
+        LDAA  readout
+        STAA  readout+2
+        STAB  readout
+        LDAA  #$FF
+        STAA  ledStat
+        JSR   dispRefresh
+        BRA   test28_01
+
+; Calculate checksum and validate input
+
+test28_02
+        LDAA  readout+6
+        STAA  f2bitpos
+        ADDA  readout+4
+        DAA
+        ADDA  readout+3
+        DAA
+        ADDA  readout+2
+        DAA
+        ANDA  #$0F
+        CMPA  readout
+        BEQ   test28_03
+        LDAA  #$04
+        STAA  ledStat
+        JSR   dispRefresh
+        BRA   test28_01
+
+; Pad out digits 1, 5-7 with 0 for conversion
+
+test28_03
+        CLR   readout+7
+        CLR   readout+6
+        CLR   readout+5
+        CLR   readout+1
+        JSR   addrBin
+        LDAA  f2bitpos
+        CMPA  #$01
+        BEQ   test28_06
+        CMPA  #$02
+        BEQ   test28_07
+        CMPA  #$04
+        BEQ   test28_08
+        CMPA  #$08
+        BEQ   test28_09
+
+; Invalid data - display error 8 and start over
+
+test28_04
+        JSR   dispBlank
+        LDD   #$0802
+        STD   testOne
+        LDAA  #$08
+        STAA  readout
+        LDAA  #$04
+        STAA  ledStat
+        JSR   dispRefresh
+test28_05
+        JSR   getKey
+        CMPA  #$0B ; Check key
+        BNE   test28_05
+        JMP   test28
+
+; Shift S/N value between 1-4 bits based on shift key
+
+test28_06
+        ASL   addrL
+        ROL   addrM
+        ROL   addrH
+test28_07
+        ASL   addrL
+        ROL   addrM
+        ROL   addrH
+test28_08
+        ASL   addrL
+        ROL   addrM
+        ROL   addrH
+test28_09
+        ASL   addrL
+        ROL   addrM
+        ROL   addrH
+
+; alert UUT of incoming Type C message
+
+        JSR   msg2way
+        LDAA  #$62
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+
+; form second message
+
+        LDAA  #$AA
+        STAA  msgTbl
+        LDAA  #$BA
+        STAA  msgTbl+1
+        LDAA  #$FF
+        STAA  msgTbl+2
+        LDAA  addrH4
+        STAA  msgTbl+3
+        LDAA  addrM4
+        STAA  msgTbl+4
+        LDAA  addrL4
+        ORAA  #$01
+        STAA  msgTbl+5
+
+        LDAA  uutGroup
+        CMPA  #$06
+        BNE   test28_11
+        LDAA  #$19
+        BRA   test28_12
+
+test28_11
+        LDAA  #$90
+test28_12
+        STAA  msgTbl+6 ; pointer into MCT-2xx memory?
+        CLR   msgTbl+7
+
+; validate S/N range - if no go, bounce back to start of test
+
+        LDAA  addrH
+        BEQ   test28_13
+        JMP   test28_04
+
+test28_13
+        ORAA  #$C0
+        STAA  msgTbl+8
+        LDAA  addrM
+        ANDA  #$C0
+        BEQ   test28_14
+        JMP   test28_04
+
+test28_14
+        LDAA  addrM
+        STAA  msgTbl+9
+        LDAA  addrL
+        ANDA  #$0F
+        BEQ   test28_15
+        JMP   test28_04
+
+test28_15
+        LDAA  addrL
+        STAA  msgTbl+10
+        CLR   msgTbl+11
+        CLR   msgTbl+12
+        LDAA  #$24
+        STAA  msgTbl+13
+        CLR   msgTbl+14
+        LDAA  #$41
+        STAA  msgBits
+        LDAA  #$02
+        STAA  xmitByte
+        LDD   #$000F
+        STD   msgLen
+
+; now send message to UUT
+
+        LDAA  #$01
+        STAA  xmitStatus
+        STAA  xmitFlag
+        LDAA  #$28
+        STAA  waitTime
+        JSR   timer
+        LDAA  xmitStatus
+        BLE   errchk09
+        JMP   error1 ; no transmit
+
+errchk09
+        JSR   dispBlank
+        LDAA  #$07
+        STAA  ledStat
+        LDD   #$0802
+        STD   testOne
+        JSR   dispRefresh
+        LDAA  #$08
+        STAA  waitTime
+        JSR   timer
+
+; checkpoint - test routing
+
+        LDAA  uutGroup
+        CMPA  #$06
+        BEQ   test29
+        JMP   test30
+
+; Test 29: MCT related - may be for multiplier, Mp, or Kh?
+
+test29
+        JSR   dispBlank
+        LDD   #$0902
+        STD   testOne
+        LDAA  #$00
+        STAA  readout
+        STAA  readout+1
+        STAA  readout+2
+        STAA  readout+3
+        STAA  readout+4
+        STAA  readout+5
+        JSR   dispRefresh
+test29_02
+        JSR   getKey
+        CMPA  #$0B ; Check key
+        BEQ   test29
+        CMPA  #$1A ; Enter key
+        BEQ   test29_03
+        LDAB  dataNum
+        BMI   test29_02
+        LDAA  readout+4
+        STAA  readout+5
+        LDAA  readout+3
+        STAA  readout+4
+        LDAA  readout+2
+        STAA  readout+3
+        LDAA  readout+1
+        STAA  readout+2
+        LDAA  readout
+        STAA  readout+1
+        STAB  readout
+        LDAA  #$FF
+        STAA  ledStat
+        JSR   dispRefresh
+        JMP   test29_02
+
+; calculate checksum and validate input
+
+test29_03
+        LDAA  readout+5
+        ADDA  readout+4
+        DAA
+        ADDA  readout+3
+        DAA
+        ADDA  readout+2
+        DAA
+        ADDA  readout+1
+        DAA
+        ANDA  #$0F
+        CMPA  readout
+        BEQ   test29_04
+        LDAA  #$04
+        STAA  ledStat
+        JSR   dispRefresh
+        BRA   test29_02
+
+; Shift number 2 digits left, pad with 0 for conversion
+
+test29_04
+        LDAA  readout+5
+        STAA  readout+7
+        LDAA  readout+4
+        STAA  readout+6
+        LDAA  readout+3
+        STAA  readout+5
+        LDAA  readout+2
+        STAA  readout+4
+        LDAA  readout+1
+        STAA  readout+3
+        CLR   readout+2
+        CLR   readout+1
+        JSR   addrBin
+
+; alert UUT of incoming Type C message
+
+        JSR   msg2way
+        LDAA  #$62
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+
+; Form Type C message
+
+        LDAA  #$AA
+        STAA  msgTbl
+        LDAA  #$BA
+        STAA  msgTbl+1
+        LDAA  #$FF
+        STAA  msgTbl+2
+        LDAA  addrH4
+        STAA  msgTbl+3
+        LDAA  addrM4
+        STAA  msgTbl+4
+        LDAA  addrL4
+        ORAA  #$02
+        STAA  msgTbl+5
+        LDAA  #$0F
+        STAA  msgTbl+6 ; pointer into MCT-2xx memory?
+        CLR   msgTbl+7
+        LDAA  addrL
+        STAA  msgTbl+15
+        STAA  msgTbl+18
+        LDAB  addrM
+        STAB  msgTbl+17
+        LDAA  addrH
+        STAA  msgTbl+16
+        LDAA  #$0C
+        STAA  msgTbl+14
+
+; Address is shifted 4 bits left, upper nybble is in Accumulator B
+
+        LDAB  #$00
+        LDAA  #$04
+test29_05
+        ASL   addrL
+        ROL   addrM
+        ROL   addrH
+        ROLB
+        DECA
+        BNE   test29_05
+
+; Form remainder of message
+
+        LDAA  addrL
+        ABA
+        STAA  msgTbl+11
+        ORAB  #$C0
+        STAB  msgTbl+8
+        LDAA  addrH
+        STAA  msgTbl+9
+        STAA  msgTbl+12
+        LDAA  addrM
+        STAA  msgTbl+10
+        ANDA  #$F0
+        STAA  msgTbl+13
+        LDAA  #$04
+        STAA  msgTbl+19
+        LDAA  #$40
+        STAA  msgTbl+20
+        LDAA  #$41
+        STAA  msgBits
+        LDAA  #$03
+        STAA  xmitByte
+        LDD   #$0015
+        STD   msgLen
+
+; now send message to UUT
+
+        LDAA  #$01
+        STAA  xmitStatus
+        STAA  xmitFlag
+        LDAA  #$36
+        STAA  waitTime
+        JSR   timer
+        LDAA  xmitStatus
+        BLE   errchk08
+        JMP   error1 ; no transmit
+
+errchk08
+        JSR   dispBlank
+        LDAA  #$07
+        STAA  ledStat
+        LDD   #$0902
+        STD   testOne
+        JSR   dispRefresh
+        LDAA  #$08
+        STAA  waitTime
+        JSR   timer
+
+; Test 30: Reset error flags, inhibit time sync, reset battery time
+
+test30
+        JSR   dispBlank
+        LDD   #$0003
+        STD   testOne
+        JSR   dispRefresh
+
+; alert UUT of incoming Type C message
+
+        JSR   msg2way
+        LDAA  #$62
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+
+; Determine which UUT group message to use
+
+        LDAA  uutGroup
+        CMPA  #$06
+        BNE   test30_1
+        LDX   #msg03 ; uutGroup: 6
+        BRA   test30_2
+
+test30_1
+        LDX   #msg02 ; uutGroup: 2 or 4
+test30_2
+        JSR   msgLoad
+
+; Address - Group 2 / 4: UUT addr + %10 / pointer: $3F
+
+; Address - Group 6: UUT addr + %01 / pointer: $35
+
+        LDAA  addrH4
+        STAA  msgTbl+3
+        LDAA  addrM4
+        STAA  msgTbl+4
+        LDAA  addrL4
+        EORA  msgTbl+5
+        STAA  msgTbl+5
+        LDAA  #$01
+        STAA  xmitStatus
+        STAA  xmitFlag
+        LDAA  #$24
+        STAA  waitTime
+        JSR   timer
+        LDAA  xmitStatus
+        BLE   errchk07
+        JMP   error1 ; no transmit
+
+; checkpoint - test routing
+
+errchk07
+        LDAA  uutGroup
+        BEQ   test32
+        CMPA  #$02
+        BNE   test35b
+
+; Test 32: TBD / does involve use of Init Enable line and a Type C message
+
+test32
+        JSR   dispBlank
+        LDD   #$0203
+        STD   testOne
+        JSR   dispRefresh
+        LDX   #msg04
+        JSR   msgLoad
+
+; Address: Emetcon test address / pointer: $1F
+; Enable Init Enable line (active low)
+
+        LDAA  piaPortA
+        ANDA  #$EF
+        STAA  piaPortA
+
+        LDAA  #$01
+        STAA  xmitStatus
+        STAA  xmitFlag
+        LDAA  #$1C
+        STAA  waitTime
+        JSR   timer
+        LDAA  xmitStatus
+        BLE   errchk06
+        JMP   error1 ; no transmit
+
+; Deactivate Init Enable line
+
+errchk06
+        LDAA  piaPortA
+        ORAA  #$10
+        STAA  piaPortA
+
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+
+; checkpoint - test routing (skip rest of tests if testing a DCT)
+
+        LDAA  testSet
+        CMPA  #$03
+        BNE   test32_3
+        JMP   test50_1
+
+; checkpoint - test routing (skip timed relay tests if testing MCT or DCT)
+
+test32_3
+        LDAA  uutType
+        CMPA  #$02
+        BEQ   test35b
+        JMP   test61
+
+; Test 35 (2-way): Test timed relays (A - D)
+
+test35b
+        JSR   dispBlank
+        LDD   #$0503
+        STD   testOne
+        JSR   dispRefresh
+
+; send message to UUT - shed relays
+
+        JSR   msg2way
+        LDAA  #$0F
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$08
+        STAA  waitTime
+        JSR   timer
+
+        LDAA  rlyStatus
+        STAA  rlyTemp
+
+; send message to UUT - restore relays
+; template loads 0 into the command byte by default, coincidentally the restore command
+
+        JSR   msg2way
+        JSR   msgCmd
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+
+; evaluate relay operation
+
+        CLR   rlyError
+        LDAA  rlyStatus
+        EORA  rlyTemp
+        STAA  rlyBits
+        LDAB  rlyNum
+        CMPB  #$04
+        BEQ   test35b_01
+        CMPB  #$03
+        BEQ   test35b_03
+        CMPB  #$02
+        BEQ   test35b_05
+        CMPB  #$01
+        BEQ   test35b_07
+        BRA   test35b_09
+test35b_01
+        LDAB  #$07
+        BITA  #$08
+        BNE   test35b_02
+        INC   rlyError
+        LDAB  #$04
+test35b_02
+        STAB  ledRlyD
+test35b_03
+        LDAB  #$07
+        BITA  #$04
+        BNE   test35b_04
+        INC   rlyError
+        LDAB  #$04
+test35b_04
+        STAB  ledRlyC
+test35b_05
+        LDAB  #$07
+        BITA  #$02
+        BNE   test35b_06
+        INC   rlyError
+        LDAB  #$04
+test35b_06
+        STAB  ledRlyB
+test35b_07
+        LDAB  #$07
+        BITA  #$01
+        BNE   test35b_08
+        INC   rlyError
+        LDAB  #$04
+test35b_08
+        STAB  ledRlyA
+test35b_09
+        LDAB  #$07
+        LDAA  rlyError
+        BEQ   test35b_10
+        LDAB  #$04
+test35b_10
+        STAB  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+
+test35b_15
+        JSR   getKey
+        CMPA  #$13 ; Repeat key
+        BNE   test35b_16
+        JMP   test32_3
+
+test35b_16
+        CMPA  #$1B ; Next key
+        BNE   test35b_15
+
+; test checkpoint
+
+test40b
+        LDAA  fctCtlNum
+        BNE   test40b_01
+        JMP   test46
+
+; Test 40 (two-way): Latched relay D
+
+test40b_01
+        JSR   dispBlank
+        LDD   #$0004
+        STD   testOne
+        JSR   dispRefresh
+        LDAA  rlyStatus
+        STAA  rlyTemp
+
+; arm latched relay
+        JSR   msg2way
+        LDAA  #$60
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+
+; close latched relay
+        JSR   msg2way
+        LDAA  #$42
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+        LDAA  rlyStatus
+        STAA  rlyLatch
+
+; open latched relay
+        JSR   msg2way
+        LDAA  #$41
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+
+; did the relay operate properly?
+
+        LDAA  rlyStatus
+        EORA  rlyLatch
+        BITA  #$04
+        BNE   test40b_04
+        LDAA  #$04
+        BRA   test40b_05
+test40b_04
+        LDAA  #$07
+test40b_05
+        STAA  ledRlyD
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+
+test40b_08
+        JSR   getKey
+        CMPA  #$13 ; Repeat key
+        BNE   test40b_09
+        JMP   test40b_01
+
+test40b_09
+        CMPA  #$1B ; Next key
+        BNE   test40b_08
+
+; Now we evaluate the FCT Control number to set post-test state of latched relay
+; 3 = leave closed, 2 = leave open, 1 = restore pre-test status
+; Decide if we skip ahead (leave open) or send one more arm / close command
+
+        LDAA  fctCtlNum
+        CMPA  #$03
+        BEQ   test40b_06
+        CMPA  #$02
+        BEQ   test46
+        LDAA  rlyTemp
+        BITA  #$04
+        BEQ   test46
+
+; we do need to go back and close the latched relay
+; turn off status LED momentarily then turn it back on after commands
+test40b_06
+        LDAA  #$0F
+        STAA  ledStat
+        JSR   dispRefresh
+        JSR   msg2way
+        LDAA  #$60
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+        JSR   msg2way
+        LDAA  #$42
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+
+; Test 46: Display Pulse initiator count
+
+test46
+        JSR   dispBlank
+        LDD   #$0604
+        STD   testOne
+        JSR   dispRefresh
+        JSR   msg2way
+
+; Determine action byte to use based on UUT group
+
+        LDAA  uutGroup
+        CMPA  #$06
+        BNE   test46_1
+        LDAA  #$12 ; uutGroup: 6 (MCT-2xx)
+        BRA   test46_2
+
+test46_1
+        LDAA  #$89 ; uutGroup: 2 or 4 (LMT-2 / DCT)
+test46_2
+        STAA  msgTbl+6 ; data pointer
+
+        JSR   msgDataQry
+        JSR   func05
+        JSR   bin2BCD
+        JSR   dispBCD
+        JSR   dispRefresh
+test46_3
+        JSR   getKey
+        CMPA  #$13 ; Repeat key
+        BNE   test46_4
+        JMP   test46
+
+test46_4
+        CMPA  #$1B ; Next key
+        BNE   test46_3
+
+; checkpoint - test routing
+
+        LDAA  testSet
+        CMPA  #$01
+        BEQ   test50_2
+
+; Test 50: Turn off test mode in UUT (skipped if doing install sequence)
+
+        JSR   dispBlank
+        LDD   #$0005
+        STD   testOne
+        JSR   dispRefresh
+        TST   lmtTestMd
+        BNE   test50_1
+        JSR   msg2way
+        LDAA  #$54
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+test50_1
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+
+; End of main two-way test suite
+
+test50_2
+        LDAA  #$48
+        STAA  keyMask
+        JMP   loopMain
+
+; These tests are run when unit is operated as a portable CCU to read selected endpoints
+
+; Test 25: Get hardware ID (condensed version called when testSet = 8)
+
+test25b
+        JSR   dispBlank
+        LDD   #$0502
+        STD   testOne
+        JSR   dispRefresh
+
+; Determine whether we are testing a DCT
+
+        LDAA  uutType
+        CMPA  #$02
+        BEQ   test25b_1
+        JMP   test25_16
+
+test25b_1
+        JSR   msg2way
+        JSR   msgDataQry
+        LDAA  msgTbl+2 ; received data
+        CMPA  addrL
+        BEQ   test25b_2
+        JMP   error5 ; other data error
+
+test25b_2
+        LDAA  msgTbl+1 ; received data
+        ANDA  #$1F
+        LDAB  addrM
+        ANDB  #$1F
+        CBA
+        BEQ   test25b_3
+        JMP   error5 ; other data error
+
+test25b_3
+        LDAA  msgTbl+3 ; received data
+        STAA  uutFWbyte
+test25b_4
+        LDAA  uutFWbyte
+        CMPA  #$01 ; S00001 (suspected LMT-1)
+        BEQ   test25b_5
+        CMPA  #$24 ; S00036 (LMT-2) _
+        BEQ   test25b_5
+        CMPA  #$4A ; S00074 (MCT-212, MCT-213, MCT-22x)
+        BEQ   test25b_6
+        CMPA  #$5D ; S00093 (MCT-240, MCT-242)
+        BEQ   test25b_6
+        CMPA  #$58 ; S00088 (MCT-210)
+        BEQ   test25b_7
+        CMPA  #$5F ; S00095 (MCT-210, MCT-213) _
+        BEQ   test25b_7
+
+        JMP   test25_16
+
+test25b_5
+        LDAA  #$02
+        BRA   test25b_8
+
+test25b_6
+        LDAA  #$04
+        BRA   test25b_8
+
+test25b_7
+        LDAA  #$06
+test25b_8
+        STAA  uutGroup
+
+; Test 45: Get and display reading (kilowatthours)
+
+test45
+        JSR   dispBlank
+        LDD   #$0504
+        STD   testOne
+        JSR   dispRefresh
+        LDAA  #$08
+        STAA  waitTime
+        JSR   timer
+        JSR   msg2way
+
+; Determine action byte to use based on UUT group
+
+        LDAA  uutGroup
+        CMPA  #$06
+        BNE   test45_1
+        LDAA  #$12 ; uutGroup: 6 (MCT-2xx)
+        BRA   test45_2
+
+test45_1
+        LDAA  #$89 ; uutGroup: 2 or 4 (LMT-2 / DCT)
+test45_2
+        STAA  msgTbl+6 ; data pointer
+
+        JSR   msgDataQry
+        LDAA  uutGroup
+        CMPA  #$02
+        BEQ   test45_3 ; uutGroup: 2
+        JMP   test45_5 ; uutGroup: 4 or 6
+
+; Group 2 (LMT with meter): Multiply pulse count by 0.0072 (divide by Rr 138 8/9)
+; other languages may have a more straightforward approach
+
+; First, multiply reading by 9
+
+test45_3
+        LDAA  msgTbl+5 ; received data
+        ASLA
+        ASLA
+        ASLA
+        STAA  temp6
+        LDAB  msgTbl+5 ; received data
+        LSRB
+        LSRB
+        LSRB
+        LSRB
+        LSRB
+        LDAA  msgTbl+4 ; received data
+        ASLA
+        ASLA
+        ASLA
+        ABA
+        STAA  temp7
+        LDAB  msgTbl+4 ; received data
+        LSRB
+        LSRB
+        LSRB
+        LSRB
+        LSRB
+        LDAA  msgTbl+3 ; received data
+        ASLA
+        ASLA
+        ASLA
+        ABA
+        STAA  temp8
+        LDAB  msgTbl+3 ; received data
+        LSRB
+        LSRB
+        LSRB
+        LSRB
+        LSRB
+        STAB  temp9
+        LDAA  msgTbl+5 ; received data
+        ADDA  temp6
+        STAA  temp6
+        LDAA  msgTbl+4 ; received data
+        ADCA  temp7
+        STAA  temp7
+        LDAA  msgTbl+3 ; received data
+        ADCA  temp8
+        STAA  temp8
+        LDAA  #$00
+        ADCA  temp9
+        STAA  temp9
+
+; Now, get ready for division routine
+
+        LDAA  #$00
+        STAA  bcdData10
+        STAA  bcdData32
+        STAA  bcdData54
+
+; Subtract 1250 multiple times until the carry (borrow) flag trips
+
+test45_4
+        LDAA  temp6
+        ADDA  #$1E
+        STAA  temp6
+        LDAA  temp7
+        ADCA  #$FB
+        STAA  temp7
+        LDAA  temp8
+        ADCA  #$FF
+        STAA  temp8
+        LDAA  temp9
+        ADCA  #$FF
+        STAA  temp9
+        BCC   test45_6
+
+; Count each subtraction without borrow
+
+        LDAA  #$01
+        ADDA  bcdData10
+        DAA
+        STAA  bcdData10
+        LDAA  #$00
+        ADCA  bcdData32
+        DAA
+        STAA  bcdData32
+        LDAA  #$00
+        ADCA  bcdData54
+        DAA
+        STAA  bcdData54
+        BRA   test45_4
+
+; Group 4 / 6: Obtain multiplier of 0.01 (divide by 100) via selective blanking
+
+test45_5
+        JSR   func05
+        JSR   bin2BCD
+        LDAA  #$FF
+        STAA  bcdData10
+        LDAA  bcdData76
+        ORAA  #$F0
+        STAA  bcdData76
+        BRA   test45_7
+
+; Group 2: Trim reading as if it was a 5-dial meter register (blank digits 7 - 5)
+
+test45_6
+        LDAA  bcdData54
+        ORAA  #$F0
+        STAA  bcdData54
+        LDAA  #$FF
+        STAA  bcdData76
+
+; Either way, we now display the results
+
+test45_7
+        JSR   dispBCD
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+test45_8
+        JSR   getKey
+        CMPA  #$13 ; Repeat key
+        BNE   test45_9
+        JMP   test25b_4
+
+test45_9
+        CMPA  #$1B ; Next key
+        BNE   test45_8
+
+; Ignore Next key if uutGroup is NOT 2
+
+        LDAA  uutGroup
+        CMPA  #$02
+        BNE   test45_8
+
+; Test 47: Get and display reading (pulse initiator 2)
+
+        JSR   dispBlank
+        LDD   #$0704
+        STD   testOne
+        JSR   dispRefresh
+        LDAA  #$08
+        STAA  waitTime
+        JSR   timer
+        JSR   msg2way
+        LDAA  #$8F
+        STAA  msgTbl+6 ; data pointer
+        JSR   msgDataQry
+        JSR   func05
+        JSR   bin2BCD
+        JSR   dispBCD
+        JSR   dispRefresh
+test47_1
+        JSR   getKey
+        CMPA  #$13 ; Repeat key
+        BNE   test47_2
+        JMP   test25b_4
+
+test47_2
+        CMPA  #$1B ; Next key
+        BNE   test47_1
+
+; Test 48: Get and display reading (pulse initiator 3)
+
+        JSR   dispBlank
+        LDD   #$0804
+        STD   testOne
+        JSR   dispRefresh
+        LDAA  #$08
+        STAA  waitTime
+        JSR   timer
+        JSR   msg2way
+        LDAA  #$92
+        STAA  msgTbl+6 ; data pointer
+        JSR   msgDataQry
+        JSR   func05
+        JSR   bin2BCD
+        JSR   dispBCD
+        JSR   dispRefresh
+test48_1
+        JSR   getKey
+        CMPA  #$13 ; Repeat key
+        BNE   test48_1
+        JMP   test25b_4
+
+; end 'quick read' portion of two-way test suite
+
+; Two-way unit tests: DCT-specific tests
+
+; Test 61: Read Analog 1
+
+test61
+        JSR   dispBlank
+        LDD   #$0106
+        STD   testOne
+        JSR   dispRefresh
+        JSR   msg2way
+        LDAA  #$67
+        STAA  msgTbl+6 ; data pointer
+        JSR   msgDataQry
+        JSR   dispDCT
+        JSR   getKeyDCT
+
+; Test 62: Read Analog 2
+
+        JSR   dispBlank
+        LDD   #$0206
+        STD   testOne
+        JSR   dispRefresh
+        JSR   msg2way
+        LDAA  #$69
+        STAA  msgTbl+6 ; data pointer
+        JSR   msgDataQry
+        JSR   dispDCT
+        JSR   getKeyDCT
+
+; Test 63: Read Analog 3
+
+        JSR   dispBlank
+        LDD   #$0306
+        STD   testOne
+        JSR   dispRefresh
+        JSR   msg2way
+        LDAA  #$6B
+        STAA  msgTbl+6 ; data pointer
+        JSR   msgDataQry
+        JSR   dispDCT
+        JSR   getKeyDCT
+
+; Test 64: Read Analog 4
+
+        JSR   dispBlank
+        LDD   #$0406
+        STD   testOne
+        JSR   dispRefresh
+        JSR   msg2way
+        LDAA  #$6D
+        STAA  msgTbl+6 ; data pointer
+        JSR   msgDataQry
+        JSR   dispDCT
+        JSR   getKeyDCT
+
+; checkpoint - test routing
+
+test70
+        LDAA  optbyte
+        ANDA  #$02
+        BEQ   test70_1
+        JMP   test75
+
+; Test 70: (Download bytes $3A - $3D and TOU delay status flags from DCT)
+
+test70_1
+        JSR   dispBlank
+        LDD   #$0007
+        STD   testOne
+        JSR   dispRefresh
+        JSR   msg2way
+        LDAA  #$3A
+        STAA  msgTbl+6 ; data pointer
+        JSR   msgDataQry
+        LDD   msgTbl+3 ; received data
+        STD   dctData1
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+        JSR   msg2way
+        LDAA  #$3C
+        STAA  msgTbl+6 ; data pointer
+        JSR   msgDataQry
+        LDD   msgTbl+3 ; received data
+        STD   dctData3
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+        JSR   msg2way
+        LDAA  #$42
+        STAA  msgTbl+6 ; data pointer
+        JSR   msgDataQry
+        LDAA  msgTbl+3 ; received data
+        STAA  dctTouStat
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+
+; Test 71: Clear DCT data
+
+        JSR   dispBlank
+        LDD   #$0107
+        STD   testOne
+        JSR   dispRefresh
+        JSR   msg2way
+        LDAA  #$55
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+
+; alert UUT of incoming Type C message
+
+        JSR   msg2way
+        LDAA  #$62
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+
+        LDX   #msg05
+        JSR   msgLoad
+
+; Address: UUT addr + %01 / data pointer: $3A
+
+        JSR   sendMsgDCT
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+
+; Test 72: Strobe DCT relays
+
+        JSR   dispBlank
+        LDD   #$0207
+        STD   testOne
+        JSR   dispRefresh
+        JSR   msg2way
+        LDAA  #$60
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+        JSR   msg2way
+        LDAA  #$41
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+        LDAA  rlyStatus
+        STAA  rlyTemp
+        LDAA  #$08
+        STAA  waitTime
+        JSR   timer
+        LDAA  rlyStatus
+        STAA  temp6
+        JSR   msg2way
+        LDAA  #$42
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+        LDAA  rlyStatus
+        STAA  temp9
+        LDAA  #$08
+        STAA  waitTime
+        JSR   timer
+
+; Evaluate relay status C - must pass both checks
+
+        CLR   temp7
+        LDAA  rlyStatus
+        BITA  #$01
+        BEQ   test72_2
+test72_1
+        LDAA  #$04
+        STAA  ledRlyC
+        STAA  temp7
+        BRA   test72_3
+
+test72_2
+        LDAA  temp9
+        BITA  #$01
+        BEQ   test72_1
+        LDAA  #$07
+        STAA  ledRlyC
+
+; Now we evaluate Relay D and overall status
+
+test72_3
+        LDAA  rlyTemp
+        ANDA  #$08
+        BNE   test72_8
+test72_4
+        LDAA  #$04
+        STAA  ledRlyD
+test72_5
+        LDAA  #$04
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+test72_6
+        JSR   getKey
+        CMPA  #$13 ; Repeat key
+        BNE   test72_7
+        JMP   test70
+
+test72_7
+        CMPA  #$1B ; Next key
+        BNE   test72_6
+        BRA   test73
+
+test72_8
+        LDAA  temp6
+        BNE   test72_4
+        LDAA  #$07
+        STAA  ledRlyD
+        TST   temp7
+        BNE   test72_5
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$28
+        STAA  waitTime
+        JSR   timer
+
+; Test 73: Upload data to DCT
+
+test73
+        JSR   dispBlank
+        LDD   #$0307
+        STD   testOne
+        JSR   dispRefresh
+
+; alert UUT of incoming Type C message
+
+        JSR   msg2way
+        LDAA  #$62
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+        LDX   #msg05
+        JSR   msgLoad
+
+; Address: UUT addr + %01 / data pointer: $3A
+
+        LDAB  dctData1
+        LSRB
+        LSRB
+        LSRB
+        LSRB
+        LDAA  msgTbl+8
+        ANDA  #$F0
+        ABA
+        STAA  msgTbl+8
+        LDD   dctData1
+        ASLD
+        ASLD
+        ASLD
+        ASLD
+        STAA  msgTbl+9
+        LDD   dctData2
+        ASLD
+        ASLD
+        ASLD
+        ASLD
+        STAA  msgTbl+10
+        LDD   dctData3
+        ASLD
+        ASLD
+        ASLD
+        ASLD
+        STAA  msgTbl+11
+        LDAB  dctData4
+        ASLB
+        ASLB
+        ASLB
+        ASLB
+        LDAA  msgTbl+12
+        ANDA  #$0F
+        ABA
+        STAA  msgTbl+12
+        JSR   sendMsgDCT
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+        LDAA  optbyte
+        ANDA  #$04
+        BEQ   test73_1
+        JSR   msg2way
+        LDAA  #$51
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+        JSR   msg2way
+        LDAA  #$52
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+test73_1
+        TST   dctTouStat ; is TOU delay disabled?
+        BEQ   test73_2
+        JSR   msg2way
+        LDAA  #$56
+        STAA  msgTbl+6 ; command byte / enable schedule
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+test73_2
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+        JMP   test78
+
+; Test 75: (TBD - copy data from $35 to dctData1)
+
+test75
+        JSR   dispBlank
+        LDD   #$0507
+        STD   testOne
+        JSR   dispRefresh
+        JSR   msg2way
+        LDAA  #$35
+        STAA  msgTbl+6 ; data pointer
+        JSR   msgDataQry
+        LDAA  msgTbl+3 ; received data
+        STAA  dctData1
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+
+; Test 76: (TBD - relay related)
+
+test76
+        JSR   dispBlank
+        LDD   #$0607
+        STD   testOne
+        JSR   dispRefresh
+        JSR   msg2way
+        LDAA  #$60
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+        LDAA  dctData1
+        ANDA  #$10
+        BEQ   test76_03
+        JSR   msg2way
+        LDAA  #$43
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+        LDAA  rlyStatus
+        STAA  rlyTemp
+        JSR   msg2way
+        LDAA  #$44
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+        BRA   test76_01
+
+test76_03
+        JSR   msg2way
+        LDAA  #$44
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+        LDAA  rlyStatus
+        STAA  rlyTemp
+        JSR   msg2way
+        LDAA  #$43
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+
+test76_01
+        CLR   temp7
+        LDAA  rlyStatus
+        EORA  rlyTemp
+        BITA  #$01
+        BNE   test76_02
+        LDAA  #$04
+        STAA  temp7
+        BRA   test76_04
+
+test76_02
+        LDAA  #$07
+test76_04
+        STAA  ledRlyC
+        LDAA  dctData1
+        ANDA  #$20
+        BEQ   test76_08
+        JSR   msg2way
+        LDAA  #$45
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+        LDAA  rlyStatus
+        STAA  rlyTemp
+        JSR   msg2way
+        LDAA  #$46
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+        BRA   test76_05
+test76_08
+        JSR   msg2way
+        LDAA  #$46
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+        LDAA  rlyStatus
+        STAA  rlyTemp
+        JSR   msg2way
+        LDAA  #$45
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+        LDAA  #$02
+        STAA  waitTime
+        JSR   timer
+test76_05
+        LDAA  rlyStatus
+        EORA  rlyTemp
+        ANDA  #$08
+        BNE   test76_10
+        LDAA  #$04
+        STAA  ledRlyD
+        LDAA  #$04
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+test76_06
+        JSR   getKey
+        CMPA  #$13 ; Repeat key
+        BNE   test76_07
+        JMP   test76
+
+test76_07
+        CMPA  #$1B ; Next key
+        BNE   test76_06
+        BRA   test78
+
+test76_10
+        LDAA  #$07
+        STAA  ledRlyD
+        TST   temp7
+        BEQ   test76_09
+        LDAA  #$04
+        BRA   test76_11
+test76_09
+        LDAA  #$07
+test76_11
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$28
+        STAA  waitTime
+        JSR   timer
+
+; test routing checkpoint
+
+test78
+        LDAA  testSet
+        CMPA  #$01
+        BEQ   test80
+
+; Test 78: (turn off test mode in DCT - identical to test 50)
+
+        JSR   dispBlank
+        LDD   #$0807
+        STD   testOne
+        JSR   dispRefresh
+        LDAA  lmtTestMd
+        BNE   test78_1
+        JSR   msg2way
+        LDAA  #$54
+        STAA  msgTbl+6 ; command byte
+        JSR   msgCmd
+test78_1
+        LDAA  #$04
+        STAA  waitTime
+        JSR   timer
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+
+; Test 80: (DCT related - get and display status of toggle switches)
+
+test80
+        JSR   dispBlank
+        LDD   #$0008
+        STD   testOne
+        JSR   dispRefresh
+        JSR   msg2way
+        LDAA  #$41
+        STAA  msgTbl+6 ; data pointer
+        JSR   msgDataQry
+        LDAA  msgTbl+3 ; received data
+        STAA  readout ; Local / remote switch
+        LDAA  msgTbl+5 ; received data
+        ROLA
+        ROLA
+        ROLA
+        ANDA  #$01
+        STAA  readout+1 ; External status switch 1
+        LDAA  msgTbl+5 ; received data
+        ROLA
+        ROLA
+        ANDA  #$01
+        STAA  readout+2 ; External status switch 2
+        LDAA  #$07
+        STAA  ledStat
+        JSR   dispRefresh
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+test80_1
+        JSR   getKey
+        CMPA  #$13 ; Repeat key
+        BNE   test80_2
+        JMP   test61
+
+test80_2
+        CMPA  #$1B ; Next key
+        BNE   test80_1
+        LDAA  #$48
+        STAA  keyMask
+        JMP   loopMain
+
+
+; Interrupt - driven by MPU NMI line
+
+; Code appears to be laid out based on theory explained in US Patent 4311964
+
+Interrupt
+
+; Are we actively listening?
+; we use 'selective hearing' for testing only, 'ears always on' for units in field
+
+        TST   xmitFlag
+        BNE   nmi01
+        JMP   nmi28
+
+; Gather next bit and advance receive counter, then exit unless we have 8 bits
+
+nmi01
+        LDAA  piaPortA
+        RORA
+        ROL   byteNow
+        DEC   countPulse
+        LDAA  countPulse
+        ANDA  #$07
+        BEQ   nmi02
+        RTI
+
+; 8 bits received - transfer completed byte
+
+nmi02
+        LDAA  byteNow
+        STAA  byteLast
+
+; Set PTM channel 3 (carrier) output based on xmitStatus
+
+        LDAB  #$52
+        STAB  ptmCtl1
+        LDAA  #$12
+        TST   xmitStatus
+        BLE   nmi04
+        LDAA  #$92
+nmi04
+        STAA  ptmCtl0
+        LDAB  #$53
+        STAB  ptmCtl1
+
+; Advance phase interval counter, then route accordingly
+
+        DEC   countPhase
+        LDAA  countPhase
+        ANDA  #$03
+        BEQ   nmi42
+        JMP   nmi05
+
+; Mode check - route to receiver or transmitter
+
+nmi42
+        DEC   xmitStatus
+        BEQ   nmi43
+        BMI   nmi51
+        RTI
+
+; Transmitter
+
+nmi43
+        INC   xmitStatus
+        DEC   msgBits
+        BNE   nmi49
+        DEC   xmitByte
+        BNE   nmi50
+
+; done - clean up and exit
+
+        LDAA  piaPortA
+        ANDA  #$F9
+        STAA  piaPortA
+        DEC   xmitStatus
+        INC   bitCount
+        CLR   msgStart
+        LDAA  #$05
+        STAA  countBit
+        RTI
+
+nmi50
+        LDAA  #$34
+        STAA  msgBits
+        CLR   bchSum
+        BRA   nmi45
+
+; Determine length of message to send (A-type, 31 bits or B-type, 52 bits)
+
+nmi49
+        LDAB  uutType
+        CMPB  #$01
+        BNE   nmi45
+        LDAA  msgBits
+        CMPA  #$1E
+        BNE   nmi45
+        CLR   bchSum
+        BRA   nmi45
+
+nmi45
+        LDAA  msgBits
+        CMPA  #$06
+        BNE   nmi46
+
+; Load BCH checksum into outgoing data stream (parity bits)
+
+        LDAA  bchSum
+        ASLA
+        ASLA
+        ADDA  msgTbl
+        STAA  msgTbl
+nmi46
+        LDX   msgLen
+nmi47
+        ROL   $9F,X ; message table - negative offset accounts for AccA
+        DEX
+        BNE   nmi47
+        ROLA
+
+; BCH checksum
+
+        JSR   nmi70
+
+; Send data through PIA pin then exit
+
+        ANDA  #$01
+        ROLA
+        ORAA  #$04
+        LDAB  piaPortA
+        ANDB  #$F9
+        ABA
+        STAA  piaPortA
+        RTI
+
+; Receiver
+
+nmi51
+        INC   xmitStatus
+        DEC   countBit
+        BEQ   nmi55
+        BMI   nmi52
+        LDAB  #$00
+        LDAA  #$01 ; this order sets up value of -1 for mSum_peak below
+        CMPA  countBit
+        BNE   nmi54
+
+        COMA
+        STAA  mSum_peak ; value written is 255 or -1
+        BRA   nmi54
+
+nmi52
+        INC   countBit
+        LDAB  mSum_last
+        TST   headerBit
+        BMI   nmi53
+        COMB
+nmi53
+        LDAA  #$FF
+        STAA  msgStart
+
+; This section controls PIA PA3 (xmit / rec relay)
+; Vestigial code as trace cut / resistor addition moves relay control to PA2 instead
+
+nmi54
+        RORB
+        RORB
+        RORB
+        RORB
+        ANDB  #$08 ; PA3 value
+        LDAA  piaPortA
+        ANDA  #$F7
+        ABA
+        STAA  piaPortA
+        BRA   nmi56
+
+nmi55
+        INC   countBit
+        LDAA  mSum_last
+        TAB
+        EORA  mSum_Old
+        BMI   nmi56
+        STAB  headerBit
+        DEC   countBit
+nmi56
+        LDAA  mSum_last
+        STAA  mSum_Old
+        LDAB  msgStart
+        TST   headerBit
+        BMI   nmi57
+        COMA
+nmi57
+        LDX   msgLen
+        TSTB ; value comes from msgStart above
+        BMI   nmi59
+        CLR   bitCount
+        LDAA  xmitByte
+        STAA  msgEnd
+        LDAA  #$00
+        STAA  bchSum
+        STAA  msgBits
+        BRA   nmi05
+
+nmi59
+        TST   bitCount
+        BNE   nmi05
+        ROLA
+nmi60
+        ROL   $9F,X ; message table - negative offset accounts for AccA
+        DEX
+        BNE   nmi60
+        INC   msgBits
+        LDX   msgLen
+        LDAA  $9F,X ; message table - negative offset accounts for AccA
+        LDAB  msgBits
+        JSR   nmi70
+        CMPB  #$34
+        BLT   nmi05
+        DEC   msgEnd
+        BNE   nmi05
+        LDAB  #$01
+        STAB  bitCount
+
+; Start of code to process incoming messages (Coherent Phase-Shift Keying algorithm)
+; Concept is laid out in US Patent 4311964
+
+; Examine bit stream to find presence / direction of bit transitions
+
+; When handling 8-bit values as signed integers, bit 7 serves as the sign bit
+; 68xx opcodes BPL and BMI evaluate this bit directly, therefore are used to determine
+; presence and direction of bit transitions.
+
+; byteOld is the previously evaluated copy of byteLast, saved for one final comparison
+; The 68xx ROL opcode is used to move the next bit into place for comparison, while the
+; previously evaluated value is retained in Accumulator A for the next comparison.
+
+; If two consecutive bits were the same, XOR comparison returns a 0, no action is taken,
+; and the loop cycles ahead to the next bit. 
+
+; If a 1 is returned, then AccB is used to retrieve the corresponding value from a
+; sine-wave table, and the current sign bit is evaluated again before updating the
+; instantaneous values of valueIi (0-degree) and valueQi (90-degree).
+
+; If the value was 0, the transition was negative (1->0) and value is added directly.
+; If the value was 1, the transition was positive (0->1) and value is negated first.
+
+; after the packet of 8 bits is evaluated, byteLast is copied to byteOld for one last
+; comparison, and valueIi and valueQi are passed into the next part of the algorithm
+; to determine if the cumulative sequence of bits translates to a 1 or a 0.
+
+nmi05
+        LDAA  byteOld
+        LDAB  byteLast
+        STAB  temp1
+        LDAA  #$00
+        STAA  valueIi
+        STAA  valueQi
+        STAA  valueI2i
+        STAA  valueQ2i
+
+        LDX   #freq1+7
+        ROR   temp1
+nmi07
+        ROL   temp1
+        TAB
+        EORB  temp1
+        BPL   nmi10
+
+        LDAB  $00,X
+        TSTA
+        BPL   nmi08
+        NEGB
+nmi08
+        ADDB  valueIi
+        STAB  valueIi
+
+        LDAB  $02,X
+        TSTA
+        BPL   nmi09
+        NEGB
+nmi09
+        ADDB  valueQi
+        STAB  valueQi
+
+        LDAB  valueI2i
+        ADDB  $0A,X
+        STAB  valueI2i
+
+        LDAB  valueQ2i
+        ADDB  $0B,X
+        STAB  valueQ2i
+
+; get ready for next bit compare
+
+nmi10
+        LDAA  temp1
+        DEX
+        CPX   #freq1-1
+        BNE   nmi07
+
+; Now process the latest instantaneous values of valueIi, valueQi, valueI2i, valueQ2i
+; to calculate incoming bit value
+
+nmi11
+        STAA  byteOld
+
+; calculate rolling averages (15/16 of previous, add in new value)
+
+        LDAA  avgI2H
+        LDAB  avgI2L
+        ASRA
+        RORB
+        ASRA
+        RORB
+        ASRA
+        RORB
+        ASRA
+        RORB
+        STD   temp1
+        LDAA  avgI2H
+        LDAB  avgI2L
+        SUBD  temp1
+        ADDA  valueI2i
+        STAA  avgI2H
+        STAB  avgI2L
+
+        LDAA  avgQ2H
+        LDAB  avgQ2L
+        ASRA
+        RORB
+        ASRA
+        RORB
+        ASRA
+        RORB
+        ASRA
+        RORB
+        STD   temp1
+        LDAA  avgQ2H
+        LDAB  avgQ2L
+        SUBD  temp1
+        ADDA  valueQ2i
+        STAA  avgQ2H
+        STAB  avgQ2L
+
+; Calculate sgnFlag polarity, copy avgQ2H to avgQ20 (previous avgQ2H value)
+
+        TST   avgI2H
+        BPL   nmi14
+        TAB
+        EORB  avgQ20
+        BPL   nmi14
+        COM   sgnFlag
+nmi14
+        STAA  avgQ20
+
+; Calculate signal level / threshold check
+
+        LDAA  avgI2H
+        BPL   nmi15
+        NEGA
+nmi15
+        LDAB  avgQ2H
+        BPL   nmi16
+        NEGB
+nmi16
+        CBA
+        BPL   nmi17
+        ASRA
+        BRA   nmi18
+
+nmi17
+        ASRB
+nmi18
+        ABA
+        STAA  sigLevel
+        CMPA  #$09
+        BPL   nmi26
+
+; No or too-weak signal - abandon and exit
+
+        CLR   vectorSum
+        JMP   nmi28
+
+; good signal - continue with vector angle divider
+
+nmi26
+        LDAA  avgI2H
+        LDAB  avgQ2H
+        CBA ; is Q2avg > I2avg?
+        BPL   nmi19
+        NEGA
+        CBA ; is Q2avg > I2avg?
+        BMI   nmi20
+        TSTB ; is Q2avg > 0?
+        BPL   nmi22
+        BRA   nmi21
+
+nmi19
+        NEGB
+        CBA ; is Q2avg now > I2avg?
+        BMI   nmi23
+; Segment 6-7 (337.5 - 315 - 292.5 degrees)
+        STAA  vectorI
+        NEGB
+        ASRB
+        STAB  vectorQ
+        BRA   nmi24
+
+; Segment 3-2 (67.5 - 45 - 22.5 degrees)
+nmi20
+        ASRA
+        NEGA
+        PSHA
+        ABA
+        STAA  vectorI
+        PULA
+        SBA
+        NEGA
+        STAA  vectorQ
+        BRA   nmi24
+
+; Segment 5 (292.5 - 270 degrees - inverse of Segment 4)
+nmi21
+        NEGA
+        NEGB
+; Segment 4 (90 - 67.5 degrees)
+nmi22
+        STAA  vectorQ
+        ASRB
+        STAB  vectorI
+        BRA   nmi24
+
+; Segment 8-1 (22.5 - 0 - 337.5 degrees)
+nmi23
+        ASRA
+        PSHA
+        ABA
+        STAA  vectorI
+        PULA
+        SBA
+        STAA  vectorQ
+
+; Phase detector
+
+nmi24
+        LDAA  valueIi
+        LDAB  vectorI
+        STAA  temp1
+        STAB  temp2
+        EORA  temp2
+        STAA  temp2
+        LDAA  temp1
+        BPL   nmi91
+        NEGA
+nmi91
+        TSTB
+        BPL   nmi92
+        NEGB
+nmi92
+        MUL
+        ASLD
+        ASLD
+        TST   temp2
+        BPL   nmi93
+        NEGA
+nmi93
+        STAA  vectorSum
+
+        LDAA  valueQi
+        LDAB  vectorQ
+        STAA  temp1
+        STAB  temp2
+        EORA  temp2
+        STAA  temp2
+        LDAA  temp1
+        BPL   nmi94
+        NEGA
+nmi94
+        TSTB
+        BPL   nmi95
+        NEGB
+nmi95
+        MUL
+        ASLD
+        ASLD
+        TST   temp2
+        BPL   nmi96
+        NEGA
+nmi96
+        ADDA  vectorSum
+        TST   sgnFlag
+        BPL   nmi25
+        COMA
+nmi25
+        STAA  vectorSum
+
+        LDAA  vectorSum
+        ASRA
+        STAA  mValue_raw
+        TST   countBit
+        BEQ   nmi34
+        TAB
+        EORB  vectorSum
+        BPL   nmi34
+        COM   sgnFlag
+
+; M-Store / M-Sum table operations
+
+; Note: Incoming operand is in Accumulator A
+
+nmi34
+        LDX   M_index
+        ASRA
+        STAA  $00,X ; mTable1
+        LDAA  #$00
+        LDX   #mTable1+3
+nmi37
+        ADDA  $00,X ; mTable1
+        DEX
+        CPX   #mTable1-1
+        BNE   nmi37
+        STAA  mSum_cur
+        TSTA
+        BPL   nmi38
+        NEGA
+nmi38
+        LDX   M_index
+        ASRA
+        ADDA  $04,X ; mTable2
+        STAA  $04,X ; mTable2
+        DEX
+        CPX   #mTable1-1
+        BNE   nmi39
+        LDX   #mTable1+3
+nmi39
+        STX   M_index
+        INC   countSum
+        TST   mSum_peak
+        BMI   nmi40
+        CMPA  mSum_peak
+        BMI   nmi40
+        STAA  mSum_peak
+        CLR   countSum
+nmi40
+        LDAA  countSum
+        ANDA  #$03
+        BNE   nmi41
+        LDAA  mSum_cur
+        STAA  mSum_last
+nmi41
+        RTI
+
+; Cleanup and exit (whether done or amplitude too low)
+
+nmi28
+        CLR   msgStart
+        LDAA  #$05
+        STAA  countBit
+        LDAA  #$00
+        STAA  mSum_peak
+        STAA  mSum_last
+        LDX   #mTable1+7
+nmi29
+        STAA  $00,X
+        DEX
+        CPX   #mTable1-1
+        BNE   nmi29
+        RTI
+
+; BCH checksum
+
+nmi70
+        PSHA
+        ASL   bchSum
+        BITA  #$01
+        BEQ   nmi71
+        LDAA  bchSum
+        BITA  #$40
+        BNE   nmi73
+        BRA   nmi72
+
+nmi71
+        LDAA  bchSum
+        BITA  #$40
+        BEQ   nmi73
+nmi72
+        EORA  #$03
+nmi73
+        ANDA  #$3F
+        STAA  bchSum
+        PULA
+        RTS
+
+
+; Subroutines
+
+; Display refresh - transfer readout buffer to 8279 display IC
+; If a different display method is used, change code accordingly
+
+; First we initialize the 8279 - not sure why it is done EVERY call
+; (can first half just move to initialization?)
+
+dispRefresh
+        LDAA  #$DC ; Command 6: Reset IC
+        STAA  kdCmd
+        LDAA  #$64 ; wait out reset interval
+dispwait
+        DECA
+        BNE   dispwait
+        LDAA  #$AA ; Command 5: Set masking (disable port A)
+        STAA  kdCmd
+        LDAA  #$18 ; Command 0: Set mode - 16 chars right-hand, 2-key lockout
+        STAA  kdCmd
+        LDAA  #$2A ; Command 1: Set clock divisor (1MHz / 10 = 100kHz)
+        STAA  kdCmd
+
+; NOW send the display buffer contents to the 8279 and exit
+
+        LDAA  #$90 ; Command 4: Start write to RAM
+        STAA  kdCmd
+        LDX   #readout
+disploop
+        LDAA  $00,X
+        STAA  kdData
+        INX
+        CPX   #readout+16
+        BNE   disploop
+        LDAA  #$80 ; Command 4: End write to RAM
+        STAA  kdCmd
+        RTS
+
+
+; Delay timer (1/16 second per count) using PTM channel 1
+
+timer
+        LDAB  #$22
+        STAB  ptmCtl0
+time1
+        LDD   #$FFFF
+        STD   ptmTm1
+time2
+        LDAA  ptmCtl1
+        ANDA  #$01
+        BEQ   time2
+        DEC   waitTime
+        BNE   time1
+        RTS
+
+
+; Get and process character from keypad, save in dataKey
+; other approaches may be suitable if using other languages
+
+getKey
+        LDAB  kbEIRQ ; wait for keypress
+        ANDB  #$01
+        BEQ   getKey
+        LDAA  #$50 ; Command 2: get key data
+        STAA  kdCmd
+        LDAA  kdData
+        ANDA  #$1F
+        STAA  dataKey
+
+; Was number key was pressed? update dataNum accordingly, else set it to -1 (NaN)
+
+        LDAB  #$00
+        LDAA  dataKey
+        CMPA  #$18 ; key 0
+        BEQ   getNum0
+        CMPA  #$10 ; key 1
+        BEQ   getNum1
+        CMPA  #$11 ; key 2
+        BEQ   getNum2
+        CMPA  #$12 ; key 3
+        BEQ   getNum3
+        CMPA  #$08 ; key 4
+        BEQ   getNum4
+        CMPA  #$09 ; key 5
+        BEQ   getNum5
+        CMPA  #$0A ; key 6
+        BEQ   getNum6
+        CMPA  #$00 ; key 7
+        BEQ   getNum7
+        CMPA  #$01 ; key 8
+        BEQ   getNum8
+        CMPA  #$02 ; key 9
+        BEQ   getNum9
+        LDAB  #$FF ; NaN value
+        BRA   getNum0
+
+getNum9
+        INCB
+getNum8
+        INCB
+getNum7
+        INCB
+getNum6
+        INCB
+getNum5
+        INCB
+getNum4
+        INCB
+getNum3
+        INCB
+getNum2
+        INCB
+getNum1
+        INCB
+getNum0
+        STAB  dataNum
+
+; Finally, check if soft reset key was pressed
+
+        CMPA  #$19
+        BEQ   getKey1
+	RTS
+
+getKey1
+        JMP   Reset
+
+
+; Process keypress during DCT analog tests 61-64
+
+getKeyDCT
+        JSR   getKey
+        LDAA  dataKey
+getKeyDCT2
+        CMPA  #$13 ; Repeat key
+        BNE   getKeyDCT1
+        INS
+        INS
+        JMP   test61
+
+getKeyDCT1
+        CMPA  #$1B ; Next key
+        BNE   getKeyDCT2
+        RTS
+
+
+; Display blanking - fill display buffer with F to turn off LED / display
+; Install LED is not included, as it is handled separately
+; If a different display method is used, change code accordingly
+
+dispBlank
+        LDAA  #$0F
+        STAA  readout
+        STAA  readout+1
+        STAA  readout+2
+        STAA  readout+3
+        STAA  readout+4
+        STAA  readout+5
+        STAA  readout+6
+        STAA  readout+7
+        STAA  testOne
+        STAA  testTen
+        STAA  ledRlyA
+        STAA  ledRlyB
+        STAA  ledRlyC
+        STAA  ledRlyD
+        STAA  ledStat
+        RTS
+
+; Convert 8-digit unpacked BCD to 24-bit binary
+; other approaches may be suitable if using other languages
+
+addrBin
+        CLC
+        LDAA  #$00
+        STAA  temp6
+        STAA  addrL
+        STAA  addrM
+        STAA  addrH
+        LDX   #readout+7
+func01_1
+        LDAA  addrM
+        LDAB  addrL
+        ADDB  $00,X
+        STAB  addrL
+        BCC   func01_2
+        ADDA  #$01
+        STAA  temp6
+        STAA  addrM
+        BCC   func01_2
+        LDAA  addrH
+        ADDA  #$01
+        STAA  addrH
+        LDAA  temp6
+func01_2
+        CPX   #readout
+        BNE   func01_5
+        RTS
+
+func01_5
+        ASLD
+        STAB  addrL
+        STAA  temp6
+        STAA  addrM
+        ROL   addrH
+        LDAA  addrH
+        STAA  temp7
+        LDAA  temp6
+        ASLD
+        ROL   temp7
+        ASLD
+        ROL   temp7
+        ADDB  addrL
+        STAB  addrL
+        ADCA  addrM
+        STAA  addrM
+        BCC   func01_6
+        INC   addrH
+func01_6
+        LDAA  temp7
+        ADDA  addrH
+        STAA  addrH
+        DEX
+        JMP   func01_1
+
+; Convert binary value to four-byte packed BCD
+; other approaches may be suitable if using other languages
+
+bin2BCD
+        LDX   f2BCD
+        LDAB  f2bytes
+        LDAA  #$00
+func02_1
+        STAA  $00,X
+        DEX
+        DECB
+        BNE   func02_1
+        INX
+        STX   f2BCD
+        LDAA  #$80
+        STAA  f2bitpos
+func02_2
+        LDX   f2binary
+        LDAA  $00,X
+        PSHA
+        DEX
+        STX   f2binary
+func02_3
+        PULA
+        PSHA
+        ANDA  f2bitpos
+        BEQ   func02_5
+        LDX   f2BCD
+        LDAB  f2bytes
+        LDAA  $00,X
+        ADDA  #$01
+func02_4
+        DAA
+        STAA  $00,X
+        DECB
+        BEQ   func02_5
+        INX
+        LDAA  $00,X
+        ADCA  #$00
+        BRA   func02_4
+
+func02_5
+        LDAA  f2bits
+        CMPA  #$01
+        BEQ   func02_7
+        LDX   f2BCD
+        LDAB  f2bytes
+        LDAA  $00,X
+        ADDA  $00,X
+func02_6
+        DAA
+        STAA  $00,X
+        DECB
+        BEQ   func02_7
+        INX
+        LDAA  $00,X
+        ADCA  $00,X
+        BRA   func02_6
+
+func02_7
+        DEC   f2bits
+        BEQ   func02_8
+        LSR   f2bitpos
+        BNE   func02_3
+        PULA
+        LDAA  #$80
+        STAA  f2bitpos
+        BRA   func02_2
+
+func02_8
+        PULA
+        RTS
+
+
+; Expand 4-byte packed BCD data to 8-byte unpacked BCD data
+; other approaches may be suitable if using other languages
+
+dispBCD
+        LDAA  bcdData10
+        ANDA  #$0F
+        STAA  readout
+        LDAA  bcdData10
+        LSRA
+        LSRA
+        LSRA
+        LSRA
+        STAA  readout+1
+        LDAA  bcdData32
+        ANDA  #$0F
+        STAA  readout+2
+        LDAA  bcdData32
+        LSRA
+        LSRA
+        LSRA
+        LSRA
+        STAA  readout+3
+        LDAA  bcdData54
+        ANDA  #$0F
+        STAA  readout+4
+        LDAA  bcdData54
+        LSRA
+        LSRA
+        LSRA
+        LSRA
+        STAA  readout+5
+        LDAA  bcdData76
+        ANDA  #$0F
+        STAA  readout+6
+        LDAA  bcdData76
+        LSRA
+        LSRA
+        LSRA
+        LSRA
+        STAA  readout+7
+        LDAA  #$07
+        STAA  ledStat
+        RTS
+
+
+; Display UUT firmware number and revision
+; other approaches may be suitable if using other languages
+
+getFWRev
+        LDAA  #$08
+        STAA  f2bits
+        LDAA  #$02
+        STAA  f2bytes
+        LDD   #uutFWbyte
+        STD   f2binary
+        LDD   #bcdData32
+        STD   f2BCD
+        JSR   bin2BCD
+        LDAA  bcdData10
+        ANDA  #$0F
+        STAA  readout+5
+        LDAA  bcdData10
+        LSRA
+        LSRA
+        LSRA
+        LSRA
+        STAA  readout+6
+        LDAA  bcdData32
+        STAA  readout+7
+        LDAA  #$08
+        STAA  f2bits
+        LDAA  #$02
+        STAA  f2bytes
+        LDD   #uutFWspec
+        STD   f2binary
+        LDD   #bcdData32
+        STD   f2BCD
+        JSR   bin2BCD
+        LDAA  bcdData10
+        ANDA  #$0F
+        STAA  readout+2
+        LDAA  bcdData10
+        LSRA
+        LSRA
+        LSRA
+        LSRA
+        STAA  readout+3
+        JSR   dispRefresh
+        LDAA  #$20
+        STAA  waitTime
+        JSR   timer
+        RTS
+
+
+; Display DCT analog data
+
+dispDCT
+        LDAA  #$10
+        STAA  f2bits
+        LDAA  #$04
+        STAA  f2bytes
+        LDD   #msgTbl+3 ; received data
+        STD   f2binary
+        LDD   #bcdData76
+        STD   f2BCD
+        LDAA  msgTbl+3 ; received data
+        ROLA
+        ROLA
+        ROLA
+        ANDA  #$03
+        STAA  dctTemp
+        LDAA  msgTbl+3 ; received data
+        ANDA  #$3F
+        STAA  msgTbl+3
+; Byte swap for proper conversion
+        LDAA  msgTbl+4 ; received data
+        STAA  msgTbl+2 ; received data
+        JSR   bin2BCD
+        JSR   dispBCD
+        LDAA  #$0F
+        STAA  readout+5
+        STAA  readout+7
+        LDAA  dctTemp
+        STAA  readout+6
+        JSR   dispRefresh
+        RTS
+
+; Process data for display (including swapping bytes for proper handling)
+; other approaches may be suitable if using other languages
+
+func05
+        LDAA  #$18
+        STAA  f2bits
+        LDAA  #$04
+        STAA  f2bytes
+        LDD   #msgTbl+5
+        STD   f2binary
+        LDD   #bcdData76
+        STD   f2BCD
+; Byte swap for proper conversion
+        LDAA  msgTbl+5 ; received data
+        LDAB  msgTbl+3 ; received data
+        STAA  msgTbl+3 ; received data
+        STAB  msgTbl+5 ; received data
+        RTS
+
+
+; Shift address left 2 bits to make room for message type flag
+; 00 = command
+; 01 = data read
+; 10 = data write
+
+addrX4
+        LDAA  addrH
+        LDAB  addrM
+        ASLD
+        ASLD
+        STAA  addrH4
+        LDAA  addrM
+        LDAB  addrL
+        ASLD
+        ASLD
+        STAA  addrM4
+        STAB  addrL4
+        RTS
+
+
+; Transmit message - standard format
+
+msgCmd
+        LDAA  #$01
+        STAA  xmitStatus
+        STAA  xmitFlag
+        LDAA  #$10
+        STAA  waitTime
+        JSR   timer
+; Check / escape if error condition exists
+        LDAA  xmitStatus
+        BLE   errchk01
+        INS
+        INS
+        JMP   error1 ; no transmit
+
+errchk01
+        CLR   xmitFlag
+        RTS
+
+
+; Transmit message - DCT format (tests 71 and 73 only)
+
+sendMsgDCT
+        LDAA  addrH4
+        STAA  msgTbl+3
+        LDAB  addrM4
+        STAB  msgTbl+4
+        LDAA  addrL4
+        ORAA  #$01
+        STAA  msgTbl+5
+        LDAA  #$01
+        STAA  xmitStatus
+        STAA  xmitFlag
+        LDAA  #$24
+        STAA  waitTime
+        JSR   timer
+; Check / escape if error condition exists
+        LDAA  xmitStatus
+        BLE   errchk02
+        INS
+        INS
+        JMP   error1 ; no transmit
+
+errchk02
+        CLR   xmitFlag
+        RTS
+
+
+; Request data from UUT
+
+; set address / reply flags first
+
+msgDataQry
+        LDAA  msgTbl+5
+        ORAA  #$01
+        STAA  msgTbl+5
+        LDAA  #$40
+        STAA  msgTbl+7
+
+        LDAA  #$01
+        STAA  xmitStatus
+        STAA  xmitFlag
+        LDAA  #$05
+        STAA  waitTime
+        JSR   timer
+
+; Check / escape if error condition exists
+
+        LDAA  msgBits
+        CMPA  #$41
+        BMI   errchk03
+        INS
+        INS
+        JMP   error1 ; no transmit
+
+; Transmission is complete once msgBits runs to 0
+
+errchk03
+        TST   msgBits
+        BNE   errchk03
+
+; Set data packet parameters
+
+        LDAA  #$07
+        STAA  msgLen+1
+        LDAA  #$01
+        STAA  xmitByte
+
+; Begin data retrieval - standard length (compare: Test 20)
+
+        LDAA  #$07
+        STAA  waitTime
+        JSR   timer
+
+; Check / escape if error condition exists
+
+        LDAA  msgBits
+        BNE   errchk04
+        INS
+        INS
+        JMP   error2 ; no response
+
+errchk04
+        LDAB  msgBits
+        CMPB  #$34
+        BNE   errchk04
+        CLR   msgBits
+
+; Check / escape if error condition exists
+
+        LDAA  bchSum
+        BEQ   errchk05
+        INS
+        INS
+        JMP   error4 ; BCH error
+
+errchk05
+        CLR   xmitFlag
+        RTS
+
+
+; Message template (Type A) for 1-way units
+
+msg1way
+        LDAA  #$AA
+        STAA  msgTbl
+        LDAA  #$B8
+        STAA  msgTbl+1
+        LDAA  #$FF
+        STAA  msgTbl+2
+        LDAA  addrL4
+        STAA  msgTbl+3
+        LDAA  #$00
+        STAA  msgTbl+4 ; command byte / data pointer
+        STAA  msgTbl+5 ; response flag: ALWAYS 0 on 1-way units
+        LDAA  #$01
+        STAA  xmitByte
+        LDAA  #$2B
+        STAA  msgBits
+        LDAA  #$06
+        STAA  msgLen+1
+        RTS
+
+
+; Message template (Type B) for 2-way units
+
+msg2way
+        LDAA  #$AA
+        STAA  msgTbl
+        LDAA  #$BA
+        STAA  msgTbl+1
+        LDAA  #$FF
+        STAA  msgTbl+2
+        LDAA  addrH4
+        STAA  msgTbl+3
+        LDAA  addrM4
+        STAA  msgTbl+4
+        LDAA  addrL4
+        STAA  msgTbl+5
+        LDAA  #$00
+        STAA  msgTbl+6 ; command byte / data pointer
+        STAA  msgTbl+7 ; response flag: set to 64 if reply is required
+        LDAA  #$01
+        STAA  xmitByte
+        LDAA  #$41
+        STAA  msgBits
+        LDAA  #$08
+        STAA  msgLen+1
+        RTS
+
+
+; Load long-form message from table
+
+msgLoad
+        LDAA  #$AA
+        STAA  msgTbl
+        LDAA  #$BA
+        STAA  msgTbl+1
+        LDD   $00,X
+        STD   msgTbl+2
+        LDD   $02,X
+        STD   msgTbl+4
+        LDD   $04,X
+        STD   msgTbl+6 ; data pointer
+        LDD   $06,X
+        STD   msgTbl+8
+        LDD   $08,X
+        STD   msgTbl+10
+        LDD   $0A,X
+        STD   msgTbl+12
+        LDD   $0C,X
+        STD   msgTbl+14
+        LDD   $0E,X
+        STD   msgTbl+16
+        LDD   $10,X
+        STD   msgTbl+18
+        LDD   $12,X
+        STD   msgTbl+20
+; Last four bytes are for overhead variables
+        LDAA  $14,X
+        STAA  msgBits
+        LDAA  $15,X
+        STAA  xmitByte
+        LDAA  #$00
+        STAA  msgLen
+        LDAA  $17,X
+        STAA  msgLen+1
+        RTS
+
+
+; Vector sum calculation tables (233 = -23, 224 = -32, 255 = -1)
+
+freq1
+        FCB   32,23,0,233,224,233,0,23,32,23
+
+freq2
+        FCB   1,0,255,0,1,0,255,0,1
+
+; Test message table
+; Loaded via msgLoad - two are full 22 bytes, three are 15 bytes
+; First two bytes (170, 186) are loaded within subroutine
+; First 2 messages are 22 bytes but length is set as 21 bytes? (overflow prevention?)
+
+; test 15, pointer byte $22, Emetcon test address + flags
+msg01
+        FCB   255,85,85,86,34,0,192,0,0,0,0,0
+        FCB   12,0,0,0,0,1,64,0,65,3,0,21
+
+; test 30a (uutGroup: 2 or 4) / pointer byte $3F
+msg02
+        FCB   255,0,0,2,63,0,207,240,16,0,0,0
+        FCB   12,0,0,0,0,2,64,0,65,3,0,21
+
+; test 30b (uutGroup: 6) / pointer byte $35
+msg03
+        FCB   255,0,0,1,53,0,207,240,0,0,0,68
+        FCB   15,255,255,255,255,255,255,255,65,2,0,15
+
+; test 32 / pointer byte $1F, Emetcon test address without flags
+msg04
+        FCB   255,85,85,85,31,0,192,0,0,15,240,52
+        FCB   15,255,255,255,255,255,255,255,65,2,0,15
+
+; test 71 / 73 (DCT related), pointer byte $3A
+msg05
+        FCB   255,0,0,1,58,0,192,3,192,3,192,68
+        FCB   15,255,255,255,255,255,255,255,65,2,0,15
+
+; Open space between end of code and processor vectors is normally padded with SWI ($3F)
+        SWI
+
+; Processor vectors
+
+        ORG   $FFF8
+        FDB   Interrupt
+        FDB   Reset
+        FDB   Interrupt
+        FDB   Reset
