@@ -1,29 +1,17 @@
-# Xenix and VAX Clones running on Raspberry pi PICO
 
-<BR>
+## 🖥️ Vintage OS Emulation — Pico Series
 
-# Versions for PICO 2 W have been uploaded. More testing will be required.
+### [Clones](https://github.com/rcman/clones) ⭐
+Run vintage operating systems on **Raspberry Pi Pico/Pico 2 W**:
+| Project | Description |
+|---------|-------------|
+| **Xenix Clone** | Microsoft's Unix variant on microcontrollers |
+| **VAX Emulator** | DEC VAX architecture emulation |
+| **OS/2 Clone** | IBM OS/2 environment |
+| **SGI IRIX** | Silicon Graphics workstation (Java) |
+| **68080 Emulator** | Motorola 68k architecture (WIP) |
+| **BCC-500** - BCC-500 Emulator | Classic BCC-500 Emulator |
+| **AS/400** - AS/400 Emulator | AS/400 Emulator with Display |
+| **AS/400** - AS/400 TN5250 Emulator | AS/400 Emulator TN5250 Server |
 
-<BR>
-
-
-# Updated December 11th, 2025
-
-<BR>
-<BR>
-
-  - Pico Xenix Updated on the November 15th, 2025 <BR>
-  - Pico Vax Updated on the November 15th, 2025 <BR>
-  - SGI  IRIX - No change <BR>
-  - OS/2 Clone - No Change <BR>
-  - 68000_Emu - Work in progress. More issues with OpCode.<BR>
-<BR>
-
-Upload them to your PICO. If you want to change the pins it's using for Transmit, Receive and Baud Rate change that in the code.
-<BR>
-
-I've added a discussion section to this repo so you can suggest impovements or additions.
-
-<BR>
-
-Enjoy.
+*Updated for Pico 2 W — December 2025*
