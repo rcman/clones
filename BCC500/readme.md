@@ -1,3 +1,11 @@
+
+![800px-BCC-500_1](https://github.com/user-attachments/assets/1e275b9b-6e64-405d-b65e-de3a24bc90c0)
+
+<BR>
+
+
+
+
 # BCC-500 Simulator Project Plan for Raspberry Pi Pico 2
 
 ## Simulator vs Emulator: Key Difference
