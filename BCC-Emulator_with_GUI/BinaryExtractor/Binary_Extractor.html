@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BCC-500 Binary Decoder</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #111827; 
+      color: #f3f4f6; 
+      min-height: 100vh;
+      padding: 16px;
+    }
+    .container { max-width: 1280px; margin: 0 auto; }
+    .hidden { display: none !important; }
+    
+    /* Header */
+    .header {
+      background: linear-gradient(to right, #2563eb, #0891b2);
+      border-radius: 8px;
+      padding: 24px;
+      margin-bottom: 24px;
+      box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3);
+    }
+    .header-content { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+    .header-title { display: flex; align-items: center; gap: 16px; }
+    .header h1 { font-size: 28px; font-weight: bold; }
+    .header p { color: #dbeafe; margin-top: 4px; }
+    .header-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+    
+    /* Buttons */
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 10px 16px; border-radius: 8px; font-weight: 500;
+      border: none; cursor: pointer; font-size: 14px;
+      transition: background 0.15s;
+    }
+    .btn-primary { background: #2563eb; color: white; }
+    .btn-primary:hover { background: #1d4ed8; }
+    .btn-white { background: white; color: #2563eb; }
+    .btn-white:hover { background: #eff6ff; }
+    .btn-secondary { background: #3b82f6; color: white; }
+    .btn-secondary:hover { background: #60a5fa; }
+    .btn-tab { background: #1f2937; color: #d1d5db; padding: 12px 24px; }
+    .btn-tab:hover { background: #374151; }
+    .btn-tab.active { background: #2563eb; color: white; }
+    
+    /* Upload screen */
+    .upload-screen {
+      display: flex; align-items: center; justify-content: center;
+      min-height: calc(100vh - 32px);
+    }
+    .upload-box { text-align: center; max-width: 600px; width: 100%; }
+    .upload-header {
+      background: linear-gradient(to right, #2563eb, #0891b2);
+      border-radius: 8px; padding: 32px; margin-bottom: 24px;
+    }
+    .upload-header h1 { font-size: 32px; margin: 16px 0 8px; }
+    .upload-header p { color: #dbeafe; }
+    .upload-drop {
+      background: #1f2937; border: 2px dashed #4b5563;
+      border-radius: 8px; padding: 48px 24px;
+    }
+    .upload-drop h2 { font-size: 20px; margin: 16px 0; }
+    .upload-drop p { color: #9ca3af; margin-bottom: 24px; }
+    .file-input { display: none; }
+    .features { background: #1f2937; border-radius: 8px; padding: 24px; margin-top: 24px; text-align: left; }
+    .features h3 { font-size: 18px; margin-bottom: 12px; }
+    .features li { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: #d1d5db; list-style: none; }
+    .features .check { color: #4ade80; }
+    
+    /* Stats grid */
+    .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 24px; }
+    .stat-card {
+      background: #1f2937; border: 1px solid #374151;
+      border-radius: 8px; padding: 16px;
+    }
+    .stat-label { display: flex; align-items: center; gap: 8px; font-size: 14px; color: #9ca3af; margin-bottom: 8px; }
+    .stat-value { font-size: 24px; font-weight: bold; }
+    .stat-sub { font-size: 12px; color: #6b7280; margin-top: 4px; }
+    
+    /* Tabs */
+    .tabs { display: flex; gap: 16px; margin-bottom: 24px; }
+    
+    /* Table */
+    .table-container { background: #1f2937; border-radius: 8px; overflow: hidden; }
+    .table-header {
+      display: grid; grid-template-columns: 1fr 1fr 0.7fr 1fr 1fr 1.5fr;
+      gap: 16px; padding: 12px 16px;
+      background: #111827; border-bottom: 1px solid #374151;
+      font-size: 12px; color: #9ca3af; font-weight: bold;
+      font-family: monospace;
+    }
+    .table-body { max-height: 500px; overflow-y: auto; }
+    .table-row {
+      display: grid; grid-template-columns: 1fr 1fr 0.7fr 1fr 1fr 1.5fr;
+      gap: 16px; padding: 10px 16px;
+      border-bottom: 1px solid #374151;
+      font-size: 14px; font-family: monospace;
+      cursor: pointer; transition: background 0.1s;
+    }
+    .table-row:hover { background: #374151; }
+    .table-row.selected { background: #374151; }
+    .table-more { padding: 16px; text-align: center; color: #6b7280; }
+    
+    /* Colors */
+    .c-addr { color: #60a5fa; }
+    .c-word { color: #d1d5db; }
+    .c-opcode { color: #facc15; }
+    .c-operand { color: #22d3ee; }
+    .c-binary { color: #6b7280; font-size: 12px; }
+    
+    /* Detail panel */
+    .detail-panel {
+      margin-top: 24px; background: #1f2937;
+      border: 2px solid #3b82f6; border-radius: 8px; padding: 24px;
+    }
+    .detail-panel h3 { font-size: 18px; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .detail-item { background: #374151; border-radius: 6px; padding: 12px; }
+    .detail-item label { font-size: 14px; color: #9ca3af; display: block; margin-bottom: 4px; }
+    .detail-item .value { font-family: monospace; font-size: 16px; }
+    
+    /* Opcode analysis */
+    .opcode-list { display: flex; flex-direction: column; gap: 8px; }
+    .opcode-item { background: #374151; border-radius: 8px; padding: 12px; }
+    .opcode-header { display: flex; justify-content: space-between; margin-bottom: 6px; }
+    .opcode-name { font-family: monospace; font-weight: bold; }
+    .opcode-stats { display: flex; gap: 16px; }
+    .opcode-stats span { color: #9ca3af; }
+    .progress-bg { background: #4b5563; border-radius: 9999px; height: 8px; }
+    .progress-bar { background: #3b82f6; border-radius: 9999px; height: 8px; transition: width 0.3s; }
+    
+    /* Icons (inline SVG) */
+    .icon { width: 20px; height: 20px; display: inline-block; vertical-align: middle; }
+    .icon-lg { width: 40px; height: 40px; }
+    .icon-xl { width: 64px; height: 64px; }
+    
+    /* Responsive */
+    @media (max-width: 900px) {
+      .stats { grid-template-columns: repeat(2, 1fr); }
+      .table-header, .table-row { font-size: 11px; gap: 8px; }
+    }
+    @media (max-width: 600px) {
+      .stats { grid-template-columns: 1fr; }
+      .header-content { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Upload Screen -->
+    <div id="upload-screen" class="upload-screen">
+      <div class="upload-box">
+        <div class="upload-header">
+          <svg class="icon-xl" style="margin:0 auto;display:block;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/>
+            <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/>
+          </svg>
+          <h1>BCC-500 Binary Decoder</h1>
+          <p>24-bit Instruction Disassembler</p>
+        </div>
+        <div class="upload-drop" onclick="document.getElementById('file-input').click()">
+          <svg class="icon-xl" style="margin:0 auto;display:block;color:#9ca3af;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+          </svg>
+          <h2>Upload BCC-500 Binary File</h2>
+          <p>Click to select a binary file to decode and analyze</p>
+          <input type="file" id="file-input" class="file-input" onchange="handleFile(this.files[0])">
+          <button class="btn btn-primary" onclick="event.stopPropagation();">
+            <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+            </svg>
+            Choose File
+          </button>
+        </div>
+        <div class="features">
+          <h3>Supported Features:</h3>
+          <ul>
+            <li><span class="check">✓</span> Decodes 24-bit BCC-500 instructions</li>
+            <li><span class="check">✓</span> Supports all 52 opcodes (HALT, LOAD, STORE, etc.)</li>
+            <li><span class="check">✓</span> Extracts 6-bit opcodes and 18-bit addresses</li>
+            <li><span class="check">✓</span> Detects ASCII string data</li>
+            <li><span class="check">✓</span> Export to ASM or BIN format</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main App (hidden initially) -->
+    <div id="main-app" class="hidden">
+      <div class="header">
+        <div class="header-content">
+          <div class="header-title">
+            <svg class="icon-lg" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+              <rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/>
+              <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/>
+            </svg>
+            <div>
+              <h1>BCC-500 Binary Decoder</h1>
+              <p id="file-name">-</p>
+            </div>
+          </div>
+          <div class="header-buttons">
+            <label class="btn btn-white" style="cursor:pointer;">
+              <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+              </svg>
+              Load New
+              <input type="file" class="file-input" onchange="handleFile(this.files[0])">
+            </label>
+            <button class="btn btn-white" onclick="downloadASM()">
+              <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+              </svg>
+              Export ASM
+            </button>
+            <button class="btn btn-secondary" onclick="downloadBIN()">
+              <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+              </svg>
+              Export BIN
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div id="stats" class="stats"></div>
+
+      <div class="tabs">
+        <button id="tab-disasm" class="btn btn-tab active" onclick="showView('disasm')">Disassembly</button>
+        <button id="tab-opcodes" class="btn btn-tab" onclick="showView('opcodes')">Opcode Analysis</button>
+      </div>
+
+      <div id="view-disasm">
+        <div class="table-container">
+          <div class="table-header">
+            <div>ADDRESS</div>
+            <div>WORD</div>
+            <div>OPCODE</div>
+            <div>OPERAND</div>
+            <div>MNEMONIC</div>
+            <div>BINARY</div>
+          </div>
+          <div id="table-body" class="table-body"></div>
+        </div>
+      </div>
+
+      <div id="view-opcodes" class="hidden">
+        <div class="table-container" style="padding:24px;">
+          <h3 style="margin-bottom:16px;font-size:20px;">Opcode Frequency Analysis</h3>
+          <div id="opcode-list" class="opcode-list"></div>
+        </div>
+      </div>
+
+      <div id="detail-panel" class="detail-panel hidden">
+        <h3><svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><polygon points="5,3 19,12 5,21"/></svg> Instruction Detail</h3>
+        <div id="detail-grid" class="detail-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Opcode map matching Assembler.h
+    const opcodeMap = {
+      0x00:'HALT',0x01:'NOP',0x02:'LOAD',0x03:'STORE',0x04:'ADD',0x05:'SUB',0x06:'AND',0x07:'OR',
+      0x08:'XOR',0x09:'JUMP',0x0A:'JZE',0x0B:'JNZ',0x0C:'JGT',0x0D:'JLT',0x0E:'CALL',0x0F:'RET',
+      0x10:'PUSH',0x11:'POP',0x12:'SHL',0x13:'SHR',0x14:'MUL',0x15:'DIV',0x16:'MOD',0x17:'CMP',
+      0x18:'MOVE',0x19:'INPUT',0x1A:'OUTPUT',0x1B:'LDA',0x1C:'LDB',0x1D:'STA',0x1E:'STB',0x1F:'LDX',
+      0x20:'STX',0x21:'EOR',0x22:'ADC',0x23:'SBC',0x24:'NEG',0x25:'COM',0x26:'INC',0x27:'DEC',
+      0x28:'ROL',0x29:'ROR',0x2A:'SKE',0x2B:'SKN',0x2C:'SKG',0x2D:'SKL',0x2E:'JOV',0x2F:'BRU',
+      0x30:'EXU',0x31:'MIY',0x32:'INT',0x33:'RTI'
+    };
+    const noOperandOpcodes = new Set([0x00,0x01,0x0F,0x11,0x24,0x25,0x26,0x27,0x33]);
+
+    let state = { fileName:'', instructions:[], words:[], stats:null, selectedAddr:null };
+
+    function handleFile(file) {
+      if (!file) return;
+      state.fileName = file.name;
+      const reader = new FileReader();
+      reader.onload = e => decodeData(new Uint8Array(e.target.result));
+      reader.readAsArrayBuffer(file);
+    }
+
+    function decodeData(data) {
+      const words = [], instructions = [], opcodeFreq = {};
+      const isAligned = data.length % 3 === 0;
+
+      for (let i = 0; i + 2 < data.length; i += 3) {
+        const b0 = data[i], b1 = data[i+1], b2 = data[i+2];
+        const word = (b0 << 16) | (b1 << 8) | b2;
+        const opcode = (word >> 18) & 0x3F;
+        const address = word & 0x3FFFF;
+        const isValid = opcode in opcodeMap;
+        const isLikely = isValid && (noOperandOpcodes.has(opcode) || address < 0x10000 || address >= 0x3F000);
+        const isAscii = b0 >= 0x20 && b0 <= 0x7E && b1 >= 0x20 && b1 <= 0x7E && b2 >= 0x20 && b2 <= 0x7E;
+
+        if (isLikely && !isAscii) {
+          instructions.push({
+            addr: Math.floor(i/3), offset: i, word, opcode, operand: address,
+            mnemonic: opcodeMap[opcode], bytes: [b0,b1,b2], isValid: true,
+            hasOperand: !noOperandOpcodes.has(opcode)
+          });
+          opcodeFreq[opcodeMap[opcode]] = (opcodeFreq[opcodeMap[opcode]] || 0) + 1;
+        } else {
+          instructions.push({
+            addr: Math.floor(i/3), offset: i, word, opcode: null, operand: null,
+            mnemonic: isAscii ? 'ASCII' : 'DATA', bytes: [b0,b1,b2], isValid: false,
+            ascii: isAscii ? String.fromCharCode(b0,b1,b2) : null
+          });
+        }
+        words.push(word);
+      }
+
+      const validCount = instructions.filter(i => i.isValid).length;
+      state.words = words;
+      state.instructions = instructions;
+      state.stats = {
+        totalWords: words.length, totalBytes: data.length,
+        validInstructions: validCount, dataWords: instructions.length - validCount,
+        asciiWords: instructions.filter(i => i.mnemonic === 'ASCII').length,
+        opcodeFreq, uniqueOpcodes: Object.keys(opcodeFreq).length, isAligned
+      };
+
+      renderApp();
+    }
+
+    function renderApp() {
+      document.getElementById('upload-screen').classList.add('hidden');
+      document.getElementById('main-app').classList.remove('hidden');
+      document.getElementById('file-name').textContent = state.fileName;
+      renderStats();
+      renderTable();
+      renderOpcodes();
+    }
+
+    function renderStats() {
+      const s = state.stats;
+      document.getElementById('stats').innerHTML = `
+        <div class="stat-card">
+          <div class="stat-label"><span style="color:#60a5fa">◉</span> Total Words</div>
+          <div class="stat-value">${s.totalWords.toLocaleString()}</div>
+          <div class="stat-sub">${s.totalBytes} bytes</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label"><span style="color:#4ade80">⚡</span> Instructions</div>
+          <div class="stat-value">${s.validInstructions.toLocaleString()}</div>
+          <div class="stat-sub">${((s.validInstructions/s.totalWords)*100).toFixed(1)}%</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label"><span style="color:#c084fc">◉</span> Data Words</div>
+          <div class="stat-value">${s.dataWords.toLocaleString()}</div>
+          <div class="stat-sub">${s.asciiWords} ASCII</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label"><span style="color:#facc15">◉</span> Unique Opcodes</div>
+          <div class="stat-value">${s.uniqueOpcodes}</div>
+          <div class="stat-sub">of 52 possible</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label"><span style="color:${s.isAligned ? '#4ade80' : '#facc15'}">◉</span> Alignment</div>
+          <div class="stat-value">${s.isAligned ? 'OK' : 'Warn'}</div>
+          <div class="stat-sub">${s.isAligned ? '3-byte aligned' : 'Not aligned'}</div>
+        </div>
+      `;
+    }
+
+    function renderTable() {
+      const max = 500;
+      const rows = state.instructions.slice(0, max).map((instr, i) => `
+        <div class="table-row ${state.selectedAddr === instr.addr ? 'selected' : ''}" onclick="selectRow(${instr.addr})">
+          <div class="c-addr">${hex(instr.addr, 5)}</div>
+          <div class="c-word">${hex(instr.word, 6)}</div>
+          <div class="c-opcode">${instr.opcode !== null ? hex(instr.opcode, 2) : '--'}</div>
+          <div class="c-operand">${instr.operand !== null ? hex(instr.operand, 5) : (instr.ascii ? '"'+instr.ascii+'"' : '-----')}</div>
+          <div style="color:${getMnemonicColor(instr.mnemonic)};font-weight:bold">${instr.mnemonic}</div>
+          <div class="c-binary">${bin(instr.word, 24).match(/.{8}/g).join(' ')}</div>
+        </div>
+      `).join('');
+
+      const more = state.instructions.length > max 
+        ? `<div class="table-more">... and ${state.instructions.length - max} more</div>` : '';
+      document.getElementById('table-body').innerHTML = rows + more;
+    }
+
+    function renderOpcodes() {
+      const freq = state.stats.opcodeFreq;
+      const total = state.stats.validInstructions;
+      const sorted = Object.entries(freq).sort((a,b) => b[1] - a[1]);
+      
+      document.getElementById('opcode-list').innerHTML = sorted.map(([op, count]) => {
+        const pct = ((count / total) * 100).toFixed(1);
+        return `
+          <div class="opcode-item">
+            <div class="opcode-header">
+              <span class="opcode-name" style="color:${getMnemonicColor(op)}">${op}</span>
+              <div class="opcode-stats">
+                <span>${count} times</span>
+                <span>${pct}%</span>
+              </div>
+            </div>
+            <div class="progress-bg"><div class="progress-bar" style="width:${pct}%"></div></div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function selectRow(addr) {
+      state.selectedAddr = addr;
+      renderTable();
+      showDetail(addr);
+    }
+
+    function showDetail(addr) {
+      const instr = state.instructions.find(i => i.addr === addr);
+      if (!instr) return;
+      
+      const panel = document.getElementById('detail-panel');
+      panel.classList.remove('hidden');
+      
+      document.getElementById('detail-grid').innerHTML = `
+        <div class="detail-item"><label>Full Word</label><div class="value">${hex(instr.word, 6)}</div></div>
+        <div class="detail-item"><label>Binary</label><div class="value" style="font-size:14px">${bin(instr.word, 24).match(/.{6}/g).join(' ')}</div></div>
+        <div class="detail-item"><label>Opcode</label><div class="value" style="color:${getMnemonicColor(instr.mnemonic)}">${instr.mnemonic} (${instr.opcode !== null ? hex(instr.opcode, 2) : 'N/A'})</div></div>
+        <div class="detail-item"><label>Operand</label><div class="value">${instr.operand !== null ? hex(instr.operand, 5) : (instr.ascii ? '"'+instr.ascii+'"' : 'N/A')}</div></div>
+        <div class="detail-item"><label>File Offset</label><div class="value">${hex(instr.offset, 6)} (${instr.offset} bytes)</div></div>
+        <div class="detail-item"><label>Raw Bytes</label><div class="value">[${instr.bytes.map(b => hex(b, 2)).join(', ')}]</div></div>
+      `;
+    }
+
+    function showView(view) {
+      document.getElementById('view-disasm').classList.toggle('hidden', view !== 'disasm');
+      document.getElementById('view-opcodes').classList.toggle('hidden', view !== 'opcodes');
+      document.getElementById('tab-disasm').classList.toggle('active', view === 'disasm');
+      document.getElementById('tab-opcodes').classList.toggle('active', view === 'opcodes');
+    }
+
+    function downloadASM() {
+      let out = `; BCC-500 Disassembly\n; Source: ${state.fileName}\n; Words: ${state.stats.totalWords}\n\n`;
+      state.instructions.forEach(instr => {
+        const a = hex(instr.addr, 5), w = hex(instr.word, 6);
+        if (instr.isValid) {
+          out += instr.hasOperand 
+            ? `${a}:  ${w}  ${instr.mnemonic.padEnd(10)} ${hex(instr.operand, 5)}\n`
+            : `${a}:  ${w}  ${instr.mnemonic}\n`;
+        } else if (instr.mnemonic === 'ASCII') {
+          out += `${a}:  ${w}  .BYTE      ; "${instr.ascii}"\n`;
+        } else {
+          out += `${a}:  ${w}  .WORD      ${w}\n`;
+        }
+      });
+      download(out, state.fileName.replace(/\.[^.]+$/, '.asm') || 'output.asm', 'text/plain');
+    }
+
+    function downloadBIN() {
+      const buf = new ArrayBuffer(state.words.length * 3);
+      const dv = new DataView(buf);
+      state.words.forEach((w, i) => {
+        dv.setUint8(i*3, (w >> 16) & 0xFF);
+        dv.setUint8(i*3 + 1, (w >> 8) & 0xFF);
+        dv.setUint8(i*3 + 2, w & 0xFF);
+      });
+      download(buf, state.fileName.replace(/\.[^.]+$/, '.bin') || 'output.bin', 'application/octet-stream');
+    }
+
+    function download(content, filename, type) {
+      const blob = new Blob([content], { type });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+    }
+
+    function hex(v, d) { return '0x' + v.toString(16).toUpperCase().padStart(d, '0'); }
+    function bin(v, b) { return v.toString(2).padStart(b, '0'); }
+
+    function getMnemonicColor(m) {
+      if (m === 'DATA') return '#6b7280';
+      if (m === 'ASCII') return '#f472b6';
+      if (m === 'HALT') return '#f87171';
+      if (['JUMP','JZE','JNZ','JGT','JLT','JOV','CALL','RET','BRU','RTI'].includes(m)) return '#facc15';
+      if (['LOAD','STORE','LDA','LDB','STA','STB','LDX','STX','MOVE'].includes(m)) return '#60a5fa';
+      if (['ADD','SUB','MUL','DIV','MOD','ADC','SBC','INC','DEC'].includes(m)) return '#4ade80';
+      if (['AND','OR','XOR','EOR','NEG','COM','SHL','SHR','ROL','ROR'].includes(m)) return '#c084fc';
+      if (['INPUT','OUTPUT'].includes(m)) return '#22d3ee';
+      if (['PUSH','POP'].includes(m)) return '#fb923c';
+      if (['SKE','SKN','SKG','SKL','CMP'].includes(m)) return '#2dd4bf';
+      return '#d1d5db';
+    }
+  </script>
+</body>
+</html>
