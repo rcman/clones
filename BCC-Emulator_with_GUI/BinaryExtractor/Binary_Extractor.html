@@ -162,19 +162,19 @@
           <h1>BCC-500 Binary Decoder</h1>
           <p>24-bit Instruction Disassembler</p>
         </div>
-        <div class="upload-drop" onclick="document.getElementById('file-input').click()">
+        <div class="upload-drop">
           <svg class="icon-xl" style="margin:0 auto;display:block;color:#9ca3af;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
             <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
           </svg>
           <h2>Upload BCC-500 Binary File</h2>
           <p>Click to select a binary file to decode and analyze</p>
-          <input type="file" id="file-input" class="file-input" onchange="handleFile(this.files[0])">
-          <button class="btn btn-primary" onclick="event.stopPropagation();">
+          <label class="btn btn-primary" style="cursor:pointer;">
             <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
               <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
             </svg>
             Choose File
-          </button>
+            <input type="file" id="file-input" class="file-input" onchange="handleFile(this.files[0])">
+          </label>
         </div>
         <div class="features">
           <h3>Supported Features:</h3>
