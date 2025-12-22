@@ -447,7 +447,8 @@
             ? `${a}:  ${w}  ${instr.mnemonic.padEnd(10)} ${hex(instr.operand, 5)}\n`
             : `${a}:  ${w}  ${instr.mnemonic}\n`;
         } else if (instr.mnemonic === 'ASCII') {
-          out += `${a}:  ${w}  .BYTE      ; "${instr.ascii}"\n`;
+          const safeAscii = instr.ascii ? instr.ascii.replace(/[^\x20-\x7E]/g, '.') : '...';
+          out += `${a}:  ${w}  .BYTE      ; "${safeAscii}"\n`;
         } else {
           out += `${a}:  ${w}  .WORD      ${w}\n`;
         }
@@ -467,11 +468,31 @@
     }
 
     function download(content, filename, type) {
-      const blob = new Blob([content], { type });
+      // Use data URI for downloads
+      let dataUri;
+      if (content instanceof ArrayBuffer) {
+        const bytes = new Uint8Array(content);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        dataUri = 'data:' + type + ';base64,' + btoa(binary);
+      } else {
+        // For text, encode to base64 to avoid character issues
+        const encoder = new TextEncoder();
+        const bytes = encoder.encode(content);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        dataUri = 'data:' + type + ';base64,' + btoa(binary);
+      }
       const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
+      a.href = dataUri;
       a.download = filename;
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
     }
 
     function hex(v, d) { return '0x' + v.toString(16).toUpperCase().padStart(d, '0'); }
