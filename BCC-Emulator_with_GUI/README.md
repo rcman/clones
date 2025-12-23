@@ -10,7 +10,8 @@ A multi-processor emulator for the fictional BCC-500 computer system, inspired b
 - **📚 Example Programs** — 5+ ready-to-run test programs included
 - **⚡ Live Updates** — Real-time processor state and terminal display
 - **🔨 Build System** — Simple Makefile for easy compilation
-
+- **🔨 Binary Extractor** — HTML extractor for Tape Binaries
+  
 ## Core Features
 
 - **Multi-processor support** — Emulates up to 6 independent processors with shared memory
