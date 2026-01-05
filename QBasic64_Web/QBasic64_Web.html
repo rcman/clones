@@ -29,25 +29,52 @@ body { font-family: monospace; background: #0000AA; color: white; height: 100vh;
 <div class="main">
 <div class="left">
 <div class="title">UNTITLED.BAS</div>
-<textarea id="editor" spellcheck="false">REM QuickBASIC 64 Test
+<textarea id="editor" spellcheck="false">REM Starfield & Plasma Demo
 SCREEN 13
 CLS
-PRINT "Drawing pixels..."
-FOR i = 0 TO 50
-  PSET (50 + i, 50), 14
+
+REM Draw a colorful border
+FOR i = 0 TO 319
+  PSET (i, 0), i MOD 16
+  PSET (i, 199), i MOD 16
 NEXT i
-PRINT "Drawing circle..."
-CIRCLE (160, 100), 40, 15
-PRINT "Drawing lines..."
-LINE (10, 150)-(100, 150), 10
-LINE (100, 150)-(100, 190), 12
-PRINT "Drawing spiral..."
-FOR a = 0 TO 100
-  x = 240 + 50 * COS(a / 10)
-  y = 140 + 50 * SIN(a / 10)
-  PSET (x, y), a MOD 16
+FOR i = 0 TO 199
+  PSET (0, i), i MOD 16
+  PSET (319, i), i MOD 16
+NEXT i
+
+REM Draw plasma-like pattern
+FOR y = 20 TO 90
+  FOR x = 20 TO 150
+    c = SIN(x / 8) * 4 + COS(y / 6) * 4 + 8
+    PSET (x, y), c
+  NEXT x
+NEXT y
+
+REM Draw starfield
+FOR i = 0 TO 80
+  sx = 170 + INT(RND * 140)
+  sy = 10 + INT(RND * 100)
+  PSET (sx, sy), 15
+NEXT i
+
+REM Draw mountain range
+FOR x = 10 TO 309
+  h = 140 + SIN(x / 20) * 15 + SIN(x / 7) * 8
+  LINE (x, 190)-(x, h), 2
+NEXT x
+
+REM Draw sun with rays
+CIRCLE (270, 50), 20, 14
+FOR a = 0 TO 12
+  rx = 270 + 30 * COS(a * 0.5)
+  ry = 50 + 30 * SIN(a * 0.5)
+  LINE (270, 50)-(rx, ry), 14
 NEXT a
-PRINT "Done!"</textarea>
+
+REM Title
+LOCATE 24, 12
+PRINT "QUICKBASIC 64 DEMO"</textarea>
 </div>
 <div class="right">
 <div class="title">OUTPUT</div>
@@ -71,10 +98,6 @@ function clr() {
   ctx.fillRect(0, 0, c.width, c.height);
 }
 
-function wait(ms) {
-  return new Promise(function(r) { setTimeout(r, ms); });
-}
-
 function run() {
   if (running) return;
   running = true;
@@ -86,71 +109,123 @@ function run() {
   var code = ed.value;
   var lines = code.split('\n');
   var vars = {};
-  var i = 0;
+  var pc = 0; // program counter
+  var forStack = []; // stack for nested FOR loops
+  var batchCount = 0;
+  var batchLimit = 50; // execute this many lines before yielding
+  
+  function findMatchingNext(startLine) {
+    var depth = 1;
+    for (var j = startLine + 1; j < lines.length; j++) {
+      var t = lines[j].trim().toUpperCase();
+      if (t.indexOf('FOR') === 0 && t.indexOf('FORMAT') !== 0) depth++;
+      if (t.indexOf('NEXT') === 0) {
+        depth--;
+        if (depth === 0) return j;
+      }
+    }
+    return lines.length; // not found, go to end
+  }
   
   function step() {
-    if (i >= lines.length || stop) {
+    if (pc >= lines.length || stop) {
       msg.textContent = stop ? 'Stopped' : 'Done';
       running = false;
       document.getElementById('run').disabled = false;
       return;
     }
     
-    var line = lines[i].trim();
+    var line = lines[pc].trim();
+    var u = line.toUpperCase();
     
-    if (!line || line.toUpperCase().indexOf('REM') === 0 || line.indexOf("'") === 0) {
-      i++;
-      setTimeout(step, 1);
+    // Skip empty lines and comments
+    if (!line || u.indexOf('REM') === 0 || line.indexOf("'") === 0) {
+      pc++;
+      batchCount++;
+      if (batchCount >= batchLimit) {
+        batchCount = 0;
+        setTimeout(step, 1);
+      } else {
+        step();
+      }
       return;
     }
     
-    if (line.toUpperCase().indexOf('FOR') === 0) {
+    // FOR loop
+    if (u.indexOf('FOR') === 0 && u.indexOf('FORMAT') !== 0) {
       var m = line.match(/FOR\s+(\w+)\s*=\s*(.+?)\s+TO\s+(.+?)(?:\s+STEP\s+(.+))?$/i);
       if (m) {
-        var v = m[1];
-        var s = calc(m[2], vars);
-        var e = calc(m[3], vars);
-        var st = m[4] ? calc(m[4], vars) : 1;
-        var ls = i + 1;
-        var le = i;
-        var d = 1;
-        for (var j = i + 1; j < lines.length; j++) {
-          var t = lines[j].trim().toUpperCase();
-          if (t.indexOf('FOR') === 0 && t.indexOf('FORMAT') !== 0) d++;
-          if (t.indexOf('NEXT') === 0) {
-            d--;
-            if (d === 0) { le = j; break; }
-          }
+        var varName = m[1];
+        var startVal = calc(m[2], vars);
+        var endVal = calc(m[3], vars);
+        var stepVal = m[4] ? calc(m[4], vars) : 1;
+        var nextLine = findMatchingNext(pc);
+        
+        vars[varName] = startVal;
+        
+        // Check if loop should execute at all
+        if ((stepVal > 0 && startVal > endVal) || (stepVal < 0 && startVal < endVal)) {
+          pc = nextLine + 1; // skip past NEXT
+        } else {
+          forStack.push({
+            varName: varName,
+            endVal: endVal,
+            stepVal: stepVal,
+            loopStart: pc + 1,
+            nextLine: nextLine
+          });
+          pc++;
         }
-        var lv = s;
-        function loop() {
-          if (stop || (st > 0 ? lv > e : lv < e)) {
-            i = le + 1;
-            setTimeout(step, 1);
-            return;
-          }
-          vars[v] = lv;
-          var bi = ls;
-          function body() {
-            if (bi >= le || stop) {
-              lv += st;
-              setTimeout(loop, 1);
-              return;
-            }
-            exec(lines[bi].trim(), vars);
-            bi++;
-            setTimeout(body, 1);
-          }
-          body();
+        batchCount++;
+        if (batchCount >= batchLimit) {
+          batchCount = 0;
+          setTimeout(step, 1);
+        } else {
+          step();
         }
-        loop();
         return;
       }
     }
     
+    // NEXT statement
+    if (u.indexOf('NEXT') === 0) {
+      if (forStack.length > 0) {
+        var loop = forStack[forStack.length - 1];
+        vars[loop.varName] += loop.stepVal;
+        
+        var done = (loop.stepVal > 0) 
+          ? vars[loop.varName] > loop.endVal 
+          : vars[loop.varName] < loop.endVal;
+        
+        if (done) {
+          forStack.pop();
+          pc++;
+        } else {
+          pc = loop.loopStart;
+        }
+      } else {
+        pc++; // NEXT without FOR, just skip
+      }
+      batchCount++;
+      if (batchCount >= batchLimit) {
+        batchCount = 0;
+        setTimeout(step, 1);
+      } else {
+        step();
+      }
+      return;
+    }
+    
+    // Regular statement
     exec(line, vars);
-    i++;
-    setTimeout(step, 10);
+    pc++;
+    batchCount++;
+    if (batchCount >= batchLimit) {
+      batchCount = 0;
+      setTimeout(step, 1);
+    } else {
+      step();
+    }
   }
   
   step();
@@ -345,6 +420,7 @@ function calc(expr, vars) {
   expr = expr.replace(/SQR\s*\(/gi, 'Math.sqrt(');
   expr = expr.replace(/ABS\s*\(/gi, 'Math.abs(');
   expr = expr.replace(/INT\s*\(/gi, 'Math.floor(');
+  expr = expr.replace(/\bRND\b/gi, 'Math.random()');
   expr = expr.replace(/\bMOD\b/gi, '%');
   
   try {
