@@ -1,0 +1,24 @@
+Thinking
+Searching
+The SDS 940 and BCC-500 were used together primarily through
+software emulation, where the BCC-500
+was designed to provide a high-performance environment for running existing SDS 940 applications. 
+The relationship between the two systems includes:
+
+    Software Compatibility: The BCC-500’s microprogrammed processors implemented a subset of the SDS 940 instruction set. This allowed it to emulate the SDS 940 environment with high efficiency, enabling users to run programs originally developed for the Berkeley Time-Sharing System on the more powerful BCC-500 hardware.
+    User Continuity: From a user's perspective at a BCC-500 terminal, the system could be made to look and act exactly like an SDS 940. This provided continuity for researchers and students who were already familiar with the SDS 940’s OnLine System (NLS) or other time-sharing tools.
+    Shared Lineage: Both machines were products of the same group of innovators from UC Berkeley’s Project Genie. The BCC-500 was conceptualized as a "second-generation" system to overcome the limitations of the SDS 940, aiming to support up to 500 simultaneous users compared to the 940’s much smaller capacity.
+    Operational Transition: In practical environments like the University of Hawaii, the BCC-500 was used to provide a larger number of students with simultaneous access to online computing by leveraging its ability to emulate the SDS 940's established time-sharing software. 
+
+    XDS 940 - Bitsavers.org
+    Mar 10, 2024 — The terminal may also be used to prepare input for a program in advance of its operation, much like the use of a keypu...
+    Bitsavers
+
+Charles P. Thacker - A.M. Turing Award Laureate
+The BCC 500 timesharing system was one of the best examples of the “second system effect” in computing. Having succeeded brilliant...
+ACM Turing Award
+BCC 500 - Computer History Wiki - Gunkies.org
+Jul 12, 2025 — The computer consisted of six independent microcoded processors, having a 24-bit word width, 18-bit addressing, and ac...
+Gunkies.org
+
+Show all
